@@ -26,10 +26,74 @@ import {
   Zap,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 type View = "dashboard" | "strategy" | "research" | "risk" | "exchange";
 type BadgeVariant = "active" | "paused" | "risk" | "paper" | "ai" | "neutral";
+type ChartWindow = "1D" | "1W" | "1M";
+type MarketProduct = "BTC-USD" | "ETH-USD" | "SOL-USD";
+type SignalType = "VWAP Reclaim" | "Momentum Breakout" | "Mean Reversion";
+type RiskProfile = "Conservative" | "Balanced" | "Aggressive";
+type BacktestStatus = "idle" | "running" | "ready" | "error";
+
+type MarketCandle = {
+  time: number;
+  low: number;
+  high: number;
+  open: number;
+  close: number;
+  volume: number;
+};
+
+type TickerResponse = {
+  price?: string;
+  time?: string;
+};
+
+type ChartPoint = {
+  candle: MarketCandle;
+  x: number;
+  openY: number;
+  highY: number;
+  lowY: number;
+  closeY: number;
+};
+
+type StrategyConfig = {
+  market: MarketProduct;
+  signal: SignalType;
+  riskProfile: RiskProfile;
+};
+
+type BacktestTrade = {
+  entryTime: number;
+  exitTime: number;
+  entryPrice: number;
+  exitPrice: number;
+  pnl: number;
+  returnPct: number;
+  reason: string;
+};
+
+type BacktestResult = {
+  finalEquity: number;
+  initialCapital: number;
+  maxDrawdown: number;
+  netPnl: number;
+  netReturn: number;
+  product: MarketProduct;
+  signal: SignalType;
+  timeRange: string;
+  trades: BacktestTrade[];
+  winRate: number;
+};
+
+type AiBrief = {
+  title: string;
+  summary: string;
+  bullets: string[];
+  confidence: string;
+};
 
 const navItems: Array<{ id: View; label: string; icon: LucideIcon }> = [
   { id: "dashboard", label: "Command", icon: BarChart3 },
@@ -112,7 +176,305 @@ const insightCards = [
   },
 ];
 
-const chartPoints = [18, 22, 21, 30, 28, 36, 33, 44, 41, 52, 49, 61];
+const marketWindowConfig: Record<ChartWindow, { durationMs: number; granularity: number; label: string }> = {
+  "1D": { durationMs: 24 * 60 * 60 * 1000, granularity: 3600, label: "Hourly candles" },
+  "1W": { durationMs: 7 * 24 * 60 * 60 * 1000, granularity: 21600, label: "6 hour candles" },
+  "1M": { durationMs: 30 * 24 * 60 * 60 * 1000, granularity: 86400, label: "Daily candles" },
+};
+
+const strategyOptions = {
+  markets: ["BTC-USD", "ETH-USD", "SOL-USD"] as MarketProduct[],
+  riskProfiles: ["Conservative", "Balanced", "Aggressive"] as RiskProfile[],
+  signals: ["VWAP Reclaim", "Momentum Breakout", "Mean Reversion"] as SignalType[],
+};
+
+const riskProfileConfig: Record<RiskProfile, { maxPosition: number; stopLoss: number; takeProfit: number }> = {
+  Aggressive: { maxPosition: 0.28, stopLoss: 0.055, takeProfit: 0.095 },
+  Balanced: { maxPosition: 0.2, stopLoss: 0.038, takeProfit: 0.066 },
+  Conservative: { maxPosition: 0.12, stopLoss: 0.024, takeProfit: 0.042 },
+};
+
+const currencyFormatter = new Intl.NumberFormat("en-US", {
+  currency: "USD",
+  maximumFractionDigits: 2,
+  style: "currency",
+});
+
+const percentFormatter = new Intl.NumberFormat("en-US", {
+  maximumFractionDigits: 2,
+  signDisplay: "always",
+  style: "percent",
+});
+
+const plainPercentFormatter = new Intl.NumberFormat("en-US", {
+  maximumFractionDigits: 2,
+  style: "percent",
+});
+
+const compactNumberFormatter = new Intl.NumberFormat("en-US", {
+  maximumFractionDigits: 1,
+  notation: "compact",
+});
+
+function productToDisplay(product: MarketProduct) {
+  return product.replace("-", "/");
+}
+
+function cycleValue<T>(values: readonly T[], current: T) {
+  const index = values.findIndex((value) => value === current);
+  return values[(index + 1) % values.length];
+}
+
+async function fetchCoinbaseCandles({
+  durationMs,
+  granularity,
+  product,
+  signal,
+}: {
+  durationMs: number;
+  granularity: number;
+  product: MarketProduct;
+  signal?: AbortSignal;
+}) {
+  const end = new Date();
+  const start = new Date(end.getTime() - durationMs);
+  const candleUrl = new URL(`https://api.exchange.coinbase.com/products/${product}/candles`);
+  candleUrl.searchParams.set("granularity", String(granularity));
+  candleUrl.searchParams.set("start", start.toISOString());
+  candleUrl.searchParams.set("end", end.toISOString());
+
+  const response = await fetch(candleUrl, { signal });
+
+  if (!response.ok) {
+    throw new Error(`${product} candles are temporarily unavailable.`);
+  }
+
+  const candlePayload = await response.json();
+  const parsedCandles = parseCoinbaseCandles(candlePayload);
+
+  if (parsedCandles.length === 0) {
+    throw new Error(`Coinbase returned no ${product} candles for this range.`);
+  }
+
+  return parsedCandles;
+}
+
+async function fetchCoinbaseTicker(product: MarketProduct, signal?: AbortSignal) {
+  const response = await fetch(`https://api.exchange.coinbase.com/products/${product}/ticker`, { signal });
+
+  if (!response.ok) {
+    throw new Error(`${product} ticker is temporarily unavailable.`);
+  }
+
+  return (await response.json()) as TickerResponse;
+}
+
+function parseCoinbaseCandles(payload: unknown): MarketCandle[] {
+  if (!Array.isArray(payload)) {
+    return [];
+  }
+
+  return payload
+    .filter((item): item is [number, number, number, number, number, number] => {
+      return (
+        Array.isArray(item) &&
+        item.length >= 6 &&
+        item.every((value) => typeof value === "number" && Number.isFinite(value))
+      );
+    })
+    .map(([time, low, high, open, close, volume]) => ({
+      close,
+      high,
+      low,
+      open,
+      time,
+      volume,
+    }))
+    .sort((a, b) => a.time - b.time);
+}
+
+function getChartPoints(candles: MarketCandle[]): ChartPoint[] {
+  if (candles.length === 0) {
+    return [];
+  }
+
+  const minPrice = Math.min(...candles.map((candle) => candle.low));
+  const maxPrice = Math.max(...candles.map((candle) => candle.high));
+  const range = maxPrice - minPrice || 1;
+  const top = 8;
+  const bottom = 72;
+  const height = bottom - top;
+  const priceToY = (price: number) => bottom - ((price - minPrice) / range) * height;
+
+  return candles.map((candle, index) => {
+    const x = candles.length === 1 ? 50 : (index / (candles.length - 1)) * 100;
+    return {
+      candle,
+      closeY: priceToY(candle.close),
+      highY: priceToY(candle.high),
+      lowY: priceToY(candle.low),
+      openY: priceToY(candle.open),
+      x,
+    };
+  });
+}
+
+function formatChartTime(time: number, window: ChartWindow) {
+  return new Intl.DateTimeFormat("en-US", {
+    day: window === "1D" ? undefined : "numeric",
+    hour: window === "1M" ? undefined : "numeric",
+    minute: window === "1D" ? "2-digit" : undefined,
+    month: window === "1D" ? undefined : "short",
+  }).format(new Date(time * 1000));
+}
+
+function average(values: number[]) {
+  if (values.length === 0) {
+    return 0;
+  }
+
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function rollingVwap(candles: MarketCandle[], endIndex: number, length: number) {
+  const start = Math.max(0, endIndex - length + 1);
+  const slice = candles.slice(start, endIndex + 1);
+  const volume = slice.reduce((sum, candle) => sum + candle.volume, 0);
+
+  if (volume === 0) {
+    return slice[slice.length - 1]?.close ?? 0;
+  }
+
+  return slice.reduce((sum, candle) => {
+    const typicalPrice = (candle.high + candle.low + candle.close) / 3;
+    return sum + typicalPrice * candle.volume;
+  }, 0) / volume;
+}
+
+function shouldEnterTrade(candles: MarketCandle[], index: number, signal: SignalType) {
+  const candle = candles[index];
+  const previous = candles[index - 1];
+
+  if (!candle || !previous || index < 12) {
+    return false;
+  }
+
+  const recentCloses = candles.slice(index - 8, index).map((item) => item.close);
+  const slowCloses = candles.slice(index - 12, index).map((item) => item.close);
+  const fastAverage = average(recentCloses.slice(-4));
+  const slowAverage = average(slowCloses);
+  const currentVwap = rollingVwap(candles, index, 8);
+  const previousVwap = rollingVwap(candles, index - 1, 8);
+  const priorHigh = Math.max(...candles.slice(index - 8, index).map((item) => item.high));
+
+  if (signal === "VWAP Reclaim") {
+    return previous.close <= previousVwap && candle.close > currentVwap && fastAverage >= slowAverage;
+  }
+
+  if (signal === "Momentum Breakout") {
+    return candle.close > priorHigh && fastAverage > slowAverage;
+  }
+
+  return candle.close < slowAverage * 0.982 && candle.close > candle.open;
+}
+
+function shouldExitTrade(candles: MarketCandle[], index: number, signal: SignalType, entryPrice: number, riskProfile: RiskProfile) {
+  const candle = candles[index];
+  const config = riskProfileConfig[riskProfile];
+  const stopPrice = entryPrice * (1 - config.stopLoss);
+  const takeProfitPrice = entryPrice * (1 + config.takeProfit);
+
+  if (candle.low <= stopPrice) {
+    return { price: stopPrice, reason: "Stop loss" };
+  }
+
+  if (candle.high >= takeProfitPrice) {
+    return { price: takeProfitPrice, reason: "Take profit" };
+  }
+
+  const slowAverage = average(candles.slice(Math.max(0, index - 10), index + 1).map((item) => item.close));
+  const currentVwap = rollingVwap(candles, index, 8);
+
+  if (signal === "VWAP Reclaim" && candle.close < currentVwap) {
+    return { price: candle.close, reason: "VWAP lost" };
+  }
+
+  if (signal === "Momentum Breakout" && candle.close < slowAverage) {
+    return { price: candle.close, reason: "Momentum faded" };
+  }
+
+  if (signal === "Mean Reversion" && candle.close >= slowAverage) {
+    return { price: candle.close, reason: "Mean reached" };
+  }
+
+  return null;
+}
+
+function runBacktest(candles: MarketCandle[], strategy: StrategyConfig, initialCapital: number): BacktestResult {
+  const config = riskProfileConfig[strategy.riskProfile];
+  const trades: BacktestTrade[] = [];
+  const equityCurve = [initialCapital];
+  let equity = initialCapital;
+  let peakEquity = initialCapital;
+  let maxDrawdown = 0;
+  let openTrade: { entryPrice: number; entryTime: number; size: number } | null = null;
+
+  for (let index = 12; index < candles.length; index += 1) {
+    const candle = candles[index];
+
+    if (!openTrade && shouldEnterTrade(candles, index, strategy.signal)) {
+      openTrade = {
+        entryPrice: candle.close,
+        entryTime: candle.time,
+        size: equity * config.maxPosition,
+      };
+      continue;
+    }
+
+    if (openTrade) {
+      const exit = shouldExitTrade(candles, index, strategy.signal, openTrade.entryPrice, strategy.riskProfile);
+      const isLastCandle = index === candles.length - 1;
+
+      if (exit || isLastCandle) {
+        const exitPrice = exit?.price ?? candle.close;
+        const returnPct = (exitPrice - openTrade.entryPrice) / openTrade.entryPrice;
+        const pnl = openTrade.size * returnPct;
+        equity += pnl;
+        peakEquity = Math.max(peakEquity, equity);
+        maxDrawdown = Math.max(maxDrawdown, (peakEquity - equity) / peakEquity);
+        equityCurve.push(equity);
+        trades.push({
+          entryPrice: openTrade.entryPrice,
+          entryTime: openTrade.entryTime,
+          exitPrice,
+          exitTime: candle.time,
+          pnl,
+          reason: exit?.reason ?? "Range end",
+          returnPct,
+        });
+        openTrade = null;
+      }
+    }
+  }
+
+  const wins = trades.filter((trade) => trade.pnl > 0).length;
+  const firstCandle = candles[0];
+  const lastCandle = candles[candles.length - 1];
+  const timeRange = `${new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" }).format(new Date(firstCandle.time * 1000))} - ${new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" }).format(new Date(lastCandle.time * 1000))}`;
+
+  return {
+    finalEquity: equity,
+    initialCapital,
+    maxDrawdown,
+    netPnl: equity - initialCapital,
+    netReturn: (equity - initialCapital) / initialCapital,
+    product: strategy.market,
+    signal: strategy.signal,
+    timeRange,
+    trades,
+    winRate: trades.length > 0 ? wins / trades.length : 0,
+  };
+}
 
 function cn(...classes: Array<string | false | undefined>) {
   return classes.filter(Boolean).join(" ");
@@ -123,12 +485,31 @@ export function App() {
   const [paperMode, setPaperMode] = useState(true);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [killConfirmOpen, setKillConfirmOpen] = useState(false);
+  const [fundModalOpen, setFundModalOpen] = useState(false);
   const [tradingLocked, setTradingLocked] = useState(false);
+  const [paperCapital, setPaperCapital] = useState(10000);
+  const [connectedExchange, setConnectedExchange] = useState(false);
 
   const activeTitle = useMemo(
     () => navItems.find((item) => item.id === activeView)?.label ?? "Command",
     [activeView],
   );
+
+  const handleSearchSubmit = (query: string) => {
+    const normalizedQuery = query.trim().toLowerCase();
+
+    if (!normalizedQuery) {
+      return;
+    }
+
+    const matchedNav = navItems.find((item) => {
+      return item.label.toLowerCase().includes(normalizedQuery) || item.id.includes(normalizedQuery);
+    });
+
+    if (matchedNav) {
+      setActiveView(matchedNav.id);
+    }
+  };
 
   return (
     <div className="app-shell">
@@ -145,7 +526,9 @@ export function App() {
           activeTitle={activeTitle}
           paperMode={paperMode}
           onPaperModeChange={setPaperMode}
+          onFundClick={() => setFundModalOpen(true)}
           onOpenNav={() => setMobileNavOpen(true)}
+          onSearchSubmit={handleSearchSubmit}
         />
         <main className="content-shell">
           {activeView === "dashboard" && (
@@ -157,7 +540,7 @@ export function App() {
               onConfirmKill={() => setKillConfirmOpen(true)}
             />
           )}
-          {activeView === "strategy" && <StrategyLabView />}
+          {activeView === "strategy" && <StrategyLabView paperCapital={paperCapital} />}
           {activeView === "research" && <AIResearchView />}
           {activeView === "risk" && (
             <RiskCenterView
@@ -165,7 +548,9 @@ export function App() {
               onConfirmKill={() => setKillConfirmOpen(true)}
             />
           )}
-          {activeView === "exchange" && <ExchangeView />}
+          {activeView === "exchange" && (
+            <ExchangeView connectedExchange={connectedExchange} onConnect={() => setConnectedExchange(true)} />
+          )}
         </main>
       </div>
       <ConfirmModal
@@ -178,6 +563,16 @@ export function App() {
         onConfirm={() => {
           setTradingLocked((current) => !current);
           setKillConfirmOpen(false);
+        }}
+      />
+      <FundingModal
+        open={fundModalOpen}
+        paperCapital={paperCapital}
+        onCancel={() => setFundModalOpen(false)}
+        onFund={(amount) => {
+          setPaperCapital((current) => current + amount);
+          setPaperMode(true);
+          setFundModalOpen(false);
         }}
       />
     </div>
@@ -286,7 +681,45 @@ function OnboardingPanel({
   );
 }
 
-function StrategyLabView() {
+function StrategyLabView({ paperCapital }: { paperCapital: number }) {
+  const [strategy, setStrategy] = useState<StrategyConfig>({
+    market: "BTC-USD",
+    riskProfile: "Conservative",
+    signal: "VWAP Reclaim",
+  });
+  const [draftReady, setDraftReady] = useState(false);
+  const [backtestStatus, setBacktestStatus] = useState<BacktestStatus>("idle");
+  const [backtestError, setBacktestError] = useState<string | null>(null);
+  const [backtestResult, setBacktestResult] = useState<BacktestResult | null>(null);
+  const riskConfig = riskProfileConfig[strategy.riskProfile];
+
+  const updateStrategy = <K extends keyof StrategyConfig>(key: K, value: StrategyConfig[K]) => {
+    setDraftReady(true);
+    setBacktestStatus("idle");
+    setBacktestResult(null);
+    setBacktestError(null);
+    setStrategy((current) => ({ ...current, [key]: value }));
+  };
+
+  const handleRunBacktest = async () => {
+    setDraftReady(true);
+    setBacktestStatus("running");
+    setBacktestError(null);
+
+    try {
+      const candles = await fetchCoinbaseCandles({
+        durationMs: 60 * 24 * 60 * 60 * 1000,
+        granularity: 21600,
+        product: strategy.market,
+      });
+      setBacktestResult(runBacktest(candles, strategy, paperCapital));
+      setBacktestStatus("ready");
+    } catch (error) {
+      setBacktestError(error instanceof Error ? error.message : "Unable to run paper backtest.");
+      setBacktestStatus("error");
+    }
+  };
+
   return (
     <div className="view-stack">
       <section className="lab-grid">
@@ -296,48 +729,257 @@ function StrategyLabView() {
               <p className="eyebrow">Strategy Lab</p>
               <h2>Momentum Builder</h2>
             </div>
-            <StatusBadge variant="paper">Paper Ready</StatusBadge>
+            <StatusBadge variant={draftReady ? "paper" : "neutral"}>{draftReady ? "Draft Ready" : "Draft"}</StatusBadge>
           </div>
           <div className="control-grid">
-            <Field label="Market" value="BTC/USDT" />
-            <Field label="Signal" value="VWAP Reclaim" />
-            <Field label="Max Position" value="14%" />
-            <Field label="Stop Loss" value="2.4%" />
+            <OptionField
+              label="Market"
+              value={productToDisplay(strategy.market)}
+              onClick={() => updateStrategy("market", cycleValue(strategyOptions.markets, strategy.market))}
+            />
+            <OptionField
+              label="Signal"
+              value={strategy.signal}
+              onClick={() => updateStrategy("signal", cycleValue(strategyOptions.signals, strategy.signal))}
+            />
+            <OptionField
+              label="Max Position"
+              value={plainPercentFormatter.format(riskConfig.maxPosition)}
+              onClick={() =>
+                updateStrategy("riskProfile", cycleValue(strategyOptions.riskProfiles, strategy.riskProfile))
+              }
+            />
+            <OptionField
+              label="Stop Loss"
+              value={plainPercentFormatter.format(riskConfig.stopLoss)}
+              onClick={() =>
+                updateStrategy("riskProfile", cycleValue(strategyOptions.riskProfiles, strategy.riskProfile))
+              }
+            />
           </div>
           <div className="segmented" role="tablist" aria-label="Risk profile">
-            <button className="active" type="button">
-              Conservative
-            </button>
-            <button type="button">Balanced</button>
-            <button type="button">Aggressive</button>
+            {strategyOptions.riskProfiles.map((profile) => (
+              <button
+                key={profile}
+                className={strategy.riskProfile === profile ? "active" : ""}
+                type="button"
+                onClick={() => updateStrategy("riskProfile", profile)}
+              >
+                {profile}
+              </button>
+            ))}
           </div>
-          <button className="btn btn-primary full-width" type="button">
-            <Play size={18} />
-            Start Paper Backtest
+          <div className="strategy-summary">
+            <div>
+              <span>Paper capital</span>
+              <strong>{currencyFormatter.format(paperCapital)}</strong>
+            </div>
+            <div>
+              <span>Take profit</span>
+              <strong>{plainPercentFormatter.format(riskConfig.takeProfit)}</strong>
+            </div>
+          </div>
+          <button
+            className="btn btn-primary full-width"
+            type="button"
+            disabled={backtestStatus === "running"}
+            onClick={handleRunBacktest}
+          >
+            {backtestStatus === "running" ? <Activity size={18} /> : <Play size={18} />}
+            {backtestStatus === "running" ? "Running Backtest" : "Start Paper Backtest"}
           </button>
         </OnyxCard>
         <EmptyState
           title="Create your first Qonyx strategy"
-          body="Set a market, define a signal, and let Qonyx simulate risk before anything goes live."
-          actionLabel="Build Strategy"
+          body={`${productToDisplay(strategy.market)} ${strategy.signal} is staged with ${strategy.riskProfile.toLowerCase()} risk.`}
+          actionLabel={draftReady ? "Run Backtest" : "Build Strategy"}
           icon={Layers3}
+          onAction={draftReady ? handleRunBacktest : () => setDraftReady(true)}
         />
       </section>
-      <OnyxCard>
+      <OnyxCard className="backtest-card">
         <div className="section-heading">
           <div>
             <p className="eyebrow">Backtest</p>
             <h2>Recent Result</h2>
           </div>
-          <StatusBadge variant="neutral">No result yet</StatusBadge>
+          <StatusBadge
+            variant={
+              backtestStatus === "ready"
+                ? backtestResult && backtestResult.netPnl >= 0
+                  ? "active"
+                  : "risk"
+                : backtestStatus === "running"
+                  ? "paper"
+                  : backtestStatus === "error"
+                    ? "risk"
+                    : "neutral"
+            }
+          >
+            {backtestStatus === "ready"
+              ? "Completed"
+              : backtestStatus === "running"
+                ? "Running"
+                : backtestStatus === "error"
+                  ? "Needs retry"
+                  : "No result yet"}
+          </StatusBadge>
         </div>
-        <LoadingSkeleton rows={4} />
+        {backtestStatus === "running" && <LoadingSkeleton rows={4} />}
+        {backtestStatus === "error" && (
+          <div className="chart-error">
+            <AlertTriangle size={22} />
+            <div>
+              <strong>Backtest failed</strong>
+              <p>{backtestError}</p>
+            </div>
+            <button className="btn btn-secondary" type="button" onClick={handleRunBacktest}>
+              Retry
+            </button>
+          </div>
+        )}
+        {backtestStatus === "idle" && (
+          <div className="backtest-empty">
+            <CandlestickChart size={24} />
+            <div>
+              <strong>Ready for a paper backtest</strong>
+              <p>Run the selected setup against the last 60 days of Coinbase 6 hour candles.</p>
+            </div>
+            <button className="btn btn-secondary" type="button" onClick={handleRunBacktest}>
+              Run Now
+            </button>
+          </div>
+        )}
+        {backtestStatus === "ready" && backtestResult && <BacktestResultPanel result={backtestResult} />}
       </OnyxCard>
     </div>
   );
 }
 
+function BacktestResultPanel({ result }: { result: BacktestResult }) {
+  const recentTrades = result.trades.slice(-5).reverse();
+
+  return (
+    <div className="backtest-result">
+      <div className="backtest-metrics">
+        <BacktestMetric label="Final Equity" value={currencyFormatter.format(result.finalEquity)} />
+        <BacktestMetric
+          label="Net PnL"
+          tone={result.netPnl >= 0 ? "profit" : "loss"}
+          value={currencyFormatter.format(result.netPnl)}
+        />
+        <BacktestMetric
+          label="Return"
+          tone={result.netReturn >= 0 ? "profit" : "loss"}
+          value={percentFormatter.format(result.netReturn)}
+        />
+        <BacktestMetric label="Win Rate" value={plainPercentFormatter.format(result.winRate)} />
+        <BacktestMetric label="Max Drawdown" tone="warning" value={plainPercentFormatter.format(result.maxDrawdown)} />
+        <BacktestMetric label="Trades" value={String(result.trades.length)} />
+      </div>
+      <div className="backtest-context">
+        <StatusBadge variant="paper">{productToDisplay(result.product)}</StatusBadge>
+        <StatusBadge variant="ai">{result.signal}</StatusBadge>
+        <span>{result.timeRange}</span>
+      </div>
+      {recentTrades.length > 0 ? (
+        <div className="table-wrap compact-table">
+          <table>
+            <thead>
+              <tr>
+                <th>Entry</th>
+                <th>Exit</th>
+                <th>Return</th>
+                <th>PnL</th>
+                <th>Reason</th>
+              </tr>
+            </thead>
+            <tbody>
+              {recentTrades.map((trade) => (
+                <tr key={`${trade.entryTime}-${trade.exitTime}`}>
+                  <td>{currencyFormatter.format(trade.entryPrice)}</td>
+                  <td>{currencyFormatter.format(trade.exitPrice)}</td>
+                  <td className={trade.returnPct >= 0 ? "profit" : "loss"}>{percentFormatter.format(trade.returnPct)}</td>
+                  <td className={trade.pnl >= 0 ? "profit" : "loss"}>{currencyFormatter.format(trade.pnl)}</td>
+                  <td>{trade.reason}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <div className="backtest-empty compact">
+          <LineChart size={22} />
+          <div>
+            <strong>No trades triggered</strong>
+            <p>The strategy did not meet entry conditions during this historical window.</p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function BacktestMetric({
+  label,
+  tone,
+  value,
+}: {
+  label: string;
+  tone?: "profit" | "loss" | "warning";
+  value: string;
+}) {
+  return (
+    <div className="backtest-metric">
+      <span>{label}</span>
+      <strong className={tone}>{value}</strong>
+    </div>
+  );
+}
+
 function AIResearchView() {
+  const [briefStatus, setBriefStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [brief, setBrief] = useState<AiBrief | null>(null);
+  const [briefError, setBriefError] = useState<string | null>(null);
+
+  const generateBrief = async () => {
+    setBriefStatus("loading");
+    setBriefError(null);
+
+    try {
+      const [candles, ticker] = await Promise.all([
+        fetchCoinbaseCandles({
+          durationMs: 24 * 60 * 60 * 1000,
+          granularity: 3600,
+          product: "BTC-USD",
+        }),
+        fetchCoinbaseTicker("BTC-USD"),
+      ]);
+      const firstClose = candles[0]?.close ?? 0;
+      const lastClose = Number(ticker.price) || candles[candles.length - 1]?.close || firstClose;
+      const change = firstClose > 0 ? (lastClose - firstClose) / firstClose : 0;
+      const high = Math.max(...candles.map((candle) => candle.high));
+      const low = Math.min(...candles.map((candle) => candle.low));
+      const volume = candles.reduce((sum, candle) => sum + candle.volume, 0);
+      const direction = change >= 0 ? "constructive" : "defensive";
+
+      setBrief({
+        bullets: [
+          `24 hour move: ${percentFormatter.format(change)} from first close.`,
+          `Observed range: ${currencyFormatter.format(low)} to ${currencyFormatter.format(high)}.`,
+          `Coinbase spot volume: ${compactNumberFormatter.format(volume)} BTC.`,
+        ],
+        confidence: Math.abs(change) > 0.025 ? "82%" : "68%",
+        summary: `BTC-USD conditions are ${direction}. Qonyx should keep position sizing tied to risk profile until the next confirmed reclaim or rejection.`,
+        title: change >= 0 ? "Momentum remains constructive" : "Momentum is under pressure",
+      });
+      setBriefStatus("ready");
+    } catch (error) {
+      setBriefError(error instanceof Error ? error.message : "Unable to generate AI market brief.");
+      setBriefStatus("error");
+    }
+  };
+
   return (
     <div className="view-stack">
       <OnyxCard className="research-welcome">
@@ -373,11 +1015,48 @@ function AIResearchView() {
           <Bot size={20} />
           <span>Analyze BTC and ETH for the next session.</span>
         </div>
-        <button className="btn btn-primary" type="button">
-          <Zap size={18} />
-          Generate Brief
+        <button className="btn btn-primary" type="button" disabled={briefStatus === "loading"} onClick={generateBrief}>
+          {briefStatus === "loading" ? <Activity size={18} /> : <Zap size={18} />}
+          {briefStatus === "loading" ? "Generating" : "Generate Brief"}
         </button>
       </OnyxCard>
+      {briefStatus === "loading" && (
+        <OnyxCard>
+          <LoadingSkeleton rows={3} />
+        </OnyxCard>
+      )}
+      {briefStatus === "error" && (
+        <OnyxCard className="chart-error">
+          <AlertTriangle size={22} />
+          <div>
+            <strong>Brief failed</strong>
+            <p>{briefError}</p>
+          </div>
+          <button className="btn btn-secondary" type="button" onClick={generateBrief}>
+            Retry
+          </button>
+        </OnyxCard>
+      )}
+      {briefStatus === "ready" && brief && (
+        <OnyxCard className="generated-brief">
+          <div className="section-heading compact">
+            <div>
+              <p className="eyebrow">Generated Brief</p>
+              <h2>{brief.title}</h2>
+            </div>
+            <StatusBadge variant="ai">{brief.confidence}</StatusBadge>
+          </div>
+          <p>{brief.summary}</p>
+          <div className="brief-bullets">
+            {brief.bullets.map((bullet) => (
+              <div key={bullet}>
+                <Sparkles size={16} />
+                <span>{bullet}</span>
+              </div>
+            ))}
+          </div>
+        </OnyxCard>
+      )}
     </div>
   );
 }
@@ -432,15 +1111,26 @@ function RiskCenterView({
   );
 }
 
-function ExchangeView() {
+function ExchangeView({
+  connectedExchange,
+  onConnect,
+}: {
+  connectedExchange: boolean;
+  onConnect: () => void;
+}) {
   return (
     <div className="view-stack">
       <section className="exchange-grid">
         <EmptyState
-          title="No exchange connected"
-          body="Connect a paper account first, then add live venues after risk controls are configured."
-          actionLabel="Connect Exchange"
+          title={connectedExchange ? "Paper exchange connected" : "No exchange connected"}
+          body={
+            connectedExchange
+              ? "Qonyx is connected to a simulated paper venue for strategy testing."
+              : "Connect a paper account first, then add live venues after risk controls are configured."
+          }
+          actionLabel={connectedExchange ? "Connected" : "Connect Exchange"}
           icon={PlugZap}
+          onAction={onConnect}
         />
         <OnyxCard>
           <div className="section-heading">
@@ -448,9 +1138,11 @@ function ExchangeView() {
               <p className="eyebrow">Connection Checklist</p>
               <h2>Launch Readiness</h2>
             </div>
-            <StatusBadge variant="paused">Pending</StatusBadge>
+            <StatusBadge variant={connectedExchange ? "paper" : "paused"}>
+              {connectedExchange ? "Paper Connected" : "Pending"}
+            </StatusBadge>
           </div>
-          <Checklist />
+          <Checklist connectedExchange={connectedExchange} />
         </OnyxCard>
       </section>
     </div>
@@ -517,15 +1209,21 @@ function AppSidebar({
 
 function AppHeader({
   activeTitle,
+  onFundClick,
   paperMode,
   onPaperModeChange,
   onOpenNav,
+  onSearchSubmit,
 }: {
   activeTitle: string;
+  onFundClick: () => void;
   paperMode: boolean;
   onPaperModeChange: (enabled: boolean) => void;
   onOpenNav: () => void;
+  onSearchSubmit: (query: string) => void;
 }) {
+  const [searchValue, setSearchValue] = useState("");
+
   return (
     <header className="topbar">
       <button className="icon-button mobile-menu" type="button" title="Open menu" onClick={onOpenNav}>
@@ -537,7 +1235,17 @@ function AppHeader({
       </div>
       <label className="search-field">
         <Search size={18} />
-        <input aria-label="Search Qonyx" placeholder="Search markets, strategies, signals" />
+        <input
+          aria-label="Search Qonyx"
+          placeholder="Search markets, strategies, signals"
+          value={searchValue}
+          onChange={(event) => setSearchValue(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              onSearchSubmit(searchValue);
+            }
+          }}
+        />
       </label>
       <label className="mode-toggle">
         <input
@@ -548,7 +1256,7 @@ function AppHeader({
         <span />
         Paper
       </label>
-      <button className="btn btn-secondary compact-button" type="button">
+      <button className="btn btn-secondary compact-button" type="button" onClick={onFundClick}>
         <CircleDollarSign size={18} />
         Fund
       </button>
@@ -592,24 +1300,92 @@ function MetricCard({
 }
 
 function ChartCard() {
-  const [window, setWindow] = useState("1D");
-  const path = chartPoints
-    .map((point, index) => {
-      const x = (index / (chartPoints.length - 1)) * 100;
-      const y = 78 - point;
-      return `${index === 0 ? "M" : "L"} ${x.toFixed(2)} ${y.toFixed(2)}`;
-    })
+  const [window, setWindow] = useState<ChartWindow>("1D");
+  const [candles, setCandles] = useState<MarketCandle[]>([]);
+  const [lastTickerPrice, setLastTickerPrice] = useState<number | null>(null);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const loadMarketData = async (range: ChartWindow, signal?: AbortSignal) => {
+    const config = marketWindowConfig[range];
+    const end = new Date();
+    const start = new Date(end.getTime() - config.durationMs);
+    const candleUrl = new URL("https://api.exchange.coinbase.com/products/BTC-USD/candles");
+    candleUrl.searchParams.set("granularity", String(config.granularity));
+    candleUrl.searchParams.set("start", start.toISOString());
+    candleUrl.searchParams.set("end", end.toISOString());
+
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      const [candleResponse, tickerResponse] = await Promise.all([
+        fetch(candleUrl, { signal }),
+        fetch("https://api.exchange.coinbase.com/products/BTC-USD/ticker", { signal }),
+      ]);
+
+      if (!candleResponse.ok || !tickerResponse.ok) {
+        throw new Error("Live market data is temporarily unavailable.");
+      }
+
+      const candlePayload = await candleResponse.json();
+      const tickerPayload = (await tickerResponse.json()) as TickerResponse;
+      const parsedCandles = parseCoinbaseCandles(candlePayload);
+
+      if (parsedCandles.length === 0) {
+        throw new Error("Coinbase returned no BTC-USD candles for this range.");
+      }
+
+      const tickerPrice = Number(tickerPayload.price);
+      setCandles(parsedCandles);
+      setLastTickerPrice(
+        Number.isFinite(tickerPrice) ? tickerPrice : parsedCandles[parsedCandles.length - 1]?.close ?? null,
+      );
+      setLastUpdated(tickerPayload.time ? new Date(tickerPayload.time) : new Date());
+    } catch (loadError) {
+      if (signal?.aborted) {
+        return;
+      }
+
+      setError(loadError instanceof Error ? loadError.message : "Unable to load live market data.");
+    } finally {
+      if (!signal?.aborted) {
+        setIsLoading(false);
+      }
+    }
+  };
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void loadMarketData(window, controller.signal);
+
+    return () => controller.abort();
+  }, [window]);
+
+  const chartPoints = getChartPoints(candles);
+  const closePath = chartPoints
+    .map((point, index) => `${index === 0 ? "M" : "L"} ${point.x.toFixed(2)} ${point.closeY.toFixed(2)}`)
     .join(" ");
+  const fillPath = closePath ? `${closePath} L 100 80 L 0 80 Z` : "";
+  const firstClose = candles[0]?.close ?? 0;
+  const latestClose = lastTickerPrice ?? candles[candles.length - 1]?.close ?? 0;
+  const change = firstClose > 0 ? (latestClose - firstClose) / firstClose : 0;
+  const trendVariant: BadgeVariant = change >= 0 ? "active" : "risk";
+  const totalVolume = candles.reduce((sum, candle) => sum + candle.volume, 0);
+  const firstLabel = candles[0] ? formatChartTime(candles[0].time, window) : "--";
+  const lastCandle = candles[candles.length - 1];
+  const lastLabel = lastCandle ? formatChartTime(lastCandle.time, window) : "--";
 
   return (
     <OnyxCard className="chart-card">
       <div className="section-heading">
         <div>
           <p className="eyebrow">Market Terminal</p>
-          <h2>BTC Momentum Flow</h2>
+          <h2>BTC-USD Live Flow</h2>
         </div>
         <div className="chart-actions">
-          {["1D", "1W", "1M"].map((range) => (
+          {(["1D", "1W", "1M"] as ChartWindow[]).map((range) => (
             <button
               key={range}
               className={window === range ? "active" : ""}
@@ -622,35 +1398,76 @@ function ChartCard() {
         </div>
       </div>
       <div className="price-row">
-        <strong className="tabular-nums">$68,421.40</strong>
-        <StatusBadge variant="active">+2.8%</StatusBadge>
+        <strong className="tabular-nums">{latestClose > 0 ? currencyFormatter.format(latestClose) : "--"}</strong>
+        <StatusBadge variant={trendVariant}>{percentFormatter.format(change)}</StatusBadge>
       </div>
-      <svg className="market-chart" viewBox="0 0 100 80" role="img" aria-label="BTC momentum chart">
-        <defs>
-          <linearGradient id="chartFill" x1="0" x2="0" y1="0" y2="1">
-            <stop offset="0%" stopColor="rgba(45, 212, 191, 0.34)" />
-            <stop offset="100%" stopColor="rgba(45, 212, 191, 0)" />
-          </linearGradient>
-        </defs>
-        <path d={`${path} L 100 80 L 0 80 Z`} fill="url(#chartFill)" />
-        <path d={path} fill="none" stroke="#2DD4BF" strokeLinecap="round" strokeWidth="2.4" />
-        {chartPoints.slice(4, 10).map((point, index) => {
-          const x = ((index + 4) / (chartPoints.length - 1)) * 100;
-          return (
-            <line
-              key={`${point}-${index}`}
-              x1={x}
-              x2={x}
-              y1={78 - point - 8}
-              y2={78 - point + 7}
-              stroke={index % 2 === 0 ? "#22C55E" : "#F43F5E"}
-              strokeLinecap="round"
-              strokeWidth="1.8"
-              opacity="0.8"
-            />
-          );
-        })}
-      </svg>
+      <div className="chart-meta">
+        <span>{marketWindowConfig[window].label}</span>
+        <span>{firstLabel} - {lastLabel}</span>
+        <span>Volume {compactNumberFormatter.format(totalVolume)} BTC</span>
+        <span>{lastUpdated ? `Updated ${lastUpdated.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : "Waiting for ticker"}</span>
+      </div>
+      <div className="market-chart-wrap">
+        {isLoading && (
+          <div className="chart-state">
+            <LoadingSkeleton rows={3} />
+          </div>
+        )}
+        {error && !isLoading && (
+          <div className="chart-error">
+            <AlertTriangle size={22} />
+            <div>
+              <strong>Unable to load real market data</strong>
+              <p>{error}</p>
+            </div>
+            <button className="btn btn-secondary" type="button" onClick={() => void loadMarketData(window)}>
+              Retry
+            </button>
+          </div>
+        )}
+        {!error && chartPoints.length > 0 && (
+          <svg className="market-chart" viewBox="0 0 100 80" role="img" aria-label="BTC-USD live candle chart">
+            <defs>
+              <linearGradient id="chartFill" x1="0" x2="0" y1="0" y2="1">
+                <stop offset="0%" stopColor="rgba(45, 212, 191, 0.34)" />
+                <stop offset="100%" stopColor="rgba(45, 212, 191, 0)" />
+              </linearGradient>
+            </defs>
+            {fillPath && <path d={fillPath} fill="url(#chartFill)" />}
+            {chartPoints.map((point) => {
+              const rising = point.candle.close >= point.candle.open;
+              const bodyTop = Math.min(point.openY, point.closeY);
+              const bodyHeight = Math.max(Math.abs(point.openY - point.closeY), 0.8);
+              return (
+                <g key={point.candle.time}>
+                  <line
+                    x1={point.x}
+                    x2={point.x}
+                    y1={point.highY}
+                    y2={point.lowY}
+                    stroke={rising ? "#22C55E" : "#F43F5E"}
+                    strokeLinecap="round"
+                    strokeWidth="0.55"
+                    opacity="0.74"
+                  />
+                  <rect
+                    x={point.x - 0.55}
+                    y={bodyTop}
+                    width="1.1"
+                    height={bodyHeight}
+                    rx="0.35"
+                    fill={rising ? "#22C55E" : "#F43F5E"}
+                    opacity="0.82"
+                  />
+                </g>
+              );
+            })}
+            {closePath && (
+              <path d={closePath} fill="none" stroke="#2DD4BF" strokeLinecap="round" strokeWidth="1.8" />
+            )}
+          </svg>
+        )}
+      </div>
     </OnyxCard>
   );
 }
@@ -754,11 +1571,13 @@ function EmptyState({
   body,
   actionLabel,
   icon: Icon,
+  onAction,
 }: {
   title: string;
   body: string;
   actionLabel: string;
   icon: LucideIcon;
+  onAction: () => void;
 }) {
   return (
     <OnyxCard className="empty-state">
@@ -769,7 +1588,7 @@ function EmptyState({
         </div>
         <h2>{title}</h2>
         <p>{body}</p>
-        <button className="btn btn-primary" type="button">
+        <button className="btn btn-primary" type="button" onClick={onAction}>
           <Sparkles size={18} />
           {actionLabel}
         </button>
@@ -837,6 +1656,63 @@ function ConfirmModal({
   );
 }
 
+function FundingModal({
+  open,
+  paperCapital,
+  onCancel,
+  onFund,
+}: {
+  open: boolean;
+  paperCapital: number;
+  onCancel: () => void;
+  onFund: (amount: number) => void;
+}) {
+  const [amount, setAmount] = useState(25000);
+
+  if (!open) {
+    return null;
+  }
+
+  return (
+    <div className="modal-layer" role="dialog" aria-modal="true" aria-labelledby="fund-title">
+      <div className="modal-card onyx-card">
+        <button className="icon-button modal-close" type="button" title="Close" onClick={onCancel}>
+          <X size={18} />
+        </button>
+        <div className="modal-icon">
+          <CircleDollarSign size={24} />
+        </div>
+        <h2 id="fund-title">Add Paper Capital</h2>
+        <p>Increase the simulated account balance used by Qonyx strategy testing.</p>
+        <div className="funding-balance">
+          <span>Current paper capital</span>
+          <strong>{currencyFormatter.format(paperCapital)}</strong>
+        </div>
+        <div className="amount-grid" aria-label="Paper funding amount">
+          {[10000, 25000, 50000].map((option) => (
+            <button
+              key={option}
+              className={amount === option ? "active" : ""}
+              type="button"
+              onClick={() => setAmount(option)}
+            >
+              {currencyFormatter.format(option)}
+            </button>
+          ))}
+        </div>
+        <div className="modal-actions">
+          <button className="btn btn-secondary" type="button" onClick={onCancel}>
+            Cancel
+          </button>
+          <button className="btn btn-primary" type="button" onClick={() => onFund(amount)}>
+            Add Funds
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function KillSwitchButton({
   locked,
   compact,
@@ -872,11 +1748,19 @@ function RiskBadge({ locked }: { locked: boolean }) {
   return <StatusBadge variant={locked ? "risk" : "active"}>{locked ? "Blocked" : "Clear"}</StatusBadge>;
 }
 
-function Field({ label, value }: { label: string; value: string }) {
+function OptionField({
+  label,
+  onClick,
+  value,
+}: {
+  label: string;
+  onClick: () => void;
+  value: string;
+}) {
   return (
     <label className="field">
       <span>{label}</span>
-      <button type="button">
+      <button type="button" onClick={onClick}>
         {value}
         <ChevronDown size={16} />
       </button>
@@ -901,11 +1785,11 @@ function RiskItem({
   );
 }
 
-function Checklist() {
+function Checklist({ connectedExchange }: { connectedExchange: boolean }) {
   const items = [
     ["Paper keys added", true],
     ["Risk limits reviewed", true],
-    ["Live venue connected", false],
+    ["Paper venue connected", connectedExchange],
     ["Strategy promoted", false],
   ] as const;
 
