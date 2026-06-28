@@ -27,19 +27,15 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import {
+  fetchCoinbaseCandles,
+  fetchMarketSnapshot,
+} from "./services/marketData";
+import type { MarketCandle, MarketProduct } from "./services/marketData";
 
 type View = "dashboard" | "strategy" | "bots" | "research" | "risk" | "exchange";
 type BadgeVariant = "active" | "paused" | "risk" | "paper" | "ai" | "neutral";
 type ChartWindow = "1D" | "1W" | "1M";
-type MarketProduct =
-  | "BTC-USD"
-  | "ETH-USD"
-  | "SOL-USD"
-  | "XRP-USD"
-  | "DOGE-USD"
-  | "ADA-USD"
-  | "AVAX-USD"
-  | "LINK-USD";
 type SignalType =
   | "VWAP Reclaim"
   | "Momentum Breakout"
@@ -66,20 +62,6 @@ type StrategyPresetId =
   | "dca-rebalance"
   | "market-maker"
   | "liquidity-breakout";
-
-type MarketCandle = {
-  time: number;
-  low: number;
-  high: number;
-  open: number;
-  close: number;
-  volume: number;
-};
-
-type TickerResponse = {
-  price?: string;
-  time?: string;
-};
 
 type ChartPoint = {
   candle: MarketCandle;
@@ -482,74 +464,6 @@ function botStatusVariant(status: BotStatus): BadgeVariant {
   }
 
   return "paused";
-}
-
-async function fetchCoinbaseCandles({
-  durationMs,
-  granularity,
-  product,
-  signal,
-}: {
-  durationMs: number;
-  granularity: number;
-  product: MarketProduct;
-  signal?: AbortSignal;
-}) {
-  const end = new Date();
-  const start = new Date(end.getTime() - durationMs);
-  const candleUrl = new URL(`https://api.exchange.coinbase.com/products/${product}/candles`);
-  candleUrl.searchParams.set("granularity", String(granularity));
-  candleUrl.searchParams.set("start", start.toISOString());
-  candleUrl.searchParams.set("end", end.toISOString());
-
-  const response = await fetch(candleUrl, { signal });
-
-  if (!response.ok) {
-    throw new Error(`${product} candles are temporarily unavailable.`);
-  }
-
-  const candlePayload = await response.json();
-  const parsedCandles = parseCoinbaseCandles(candlePayload);
-
-  if (parsedCandles.length === 0) {
-    throw new Error(`Coinbase returned no ${product} candles for this range.`);
-  }
-
-  return parsedCandles;
-}
-
-async function fetchCoinbaseTicker(product: MarketProduct, signal?: AbortSignal) {
-  const response = await fetch(`https://api.exchange.coinbase.com/products/${product}/ticker`, { signal });
-
-  if (!response.ok) {
-    throw new Error(`${product} ticker is temporarily unavailable.`);
-  }
-
-  return (await response.json()) as TickerResponse;
-}
-
-function parseCoinbaseCandles(payload: unknown): MarketCandle[] {
-  if (!Array.isArray(payload)) {
-    return [];
-  }
-
-  return payload
-    .filter((item): item is [number, number, number, number, number, number] => {
-      return (
-        Array.isArray(item) &&
-        item.length >= 6 &&
-        item.every((value) => typeof value === "number" && Number.isFinite(value))
-      );
-    })
-    .map(([time, low, high, open, close, volume]) => ({
-      close,
-      high,
-      low,
-      open,
-      time,
-      volume,
-    }))
-    .sort((a, b) => a.time - b.time);
 }
 
 function getChartPoints(candles: MarketCandle[]): ChartPoint[] {
@@ -1683,14 +1597,11 @@ function AIResearchView() {
     setBriefError(null);
 
     try {
-      const [candles, ticker] = await Promise.all([
-        fetchCoinbaseCandles({
-          durationMs: 24 * 60 * 60 * 1000,
-          granularity: 3600,
-          product: "BTC-USD",
-        }),
-        fetchCoinbaseTicker("BTC-USD"),
-      ]);
+      const { candles, ticker } = await fetchMarketSnapshot({
+        durationMs: 24 * 60 * 60 * 1000,
+        granularity: 3600,
+        product: "BTC-USD",
+      });
       const firstClose = candles[0]?.close ?? 0;
       const lastClose = Number(ticker.price) || candles[candles.length - 1]?.close || firstClose;
       const change = firstClose > 0 ? (lastClose - firstClose) / firstClose : 0;
@@ -2045,40 +1956,23 @@ function ChartCard() {
 
   const loadMarketData = async (range: ChartWindow, signal?: AbortSignal) => {
     const config = marketWindowConfig[range];
-    const end = new Date();
-    const start = new Date(end.getTime() - config.durationMs);
-    const candleUrl = new URL("https://api.exchange.coinbase.com/products/BTC-USD/candles");
-    candleUrl.searchParams.set("granularity", String(config.granularity));
-    candleUrl.searchParams.set("start", start.toISOString());
-    candleUrl.searchParams.set("end", end.toISOString());
 
     setIsLoading(true);
     setError(null);
 
     try {
-      const [candleResponse, tickerResponse] = await Promise.all([
-        fetch(candleUrl, { signal }),
-        fetch("https://api.exchange.coinbase.com/products/BTC-USD/ticker", { signal }),
-      ]);
-
-      if (!candleResponse.ok || !tickerResponse.ok) {
-        throw new Error("Live market data is temporarily unavailable.");
-      }
-
-      const candlePayload = await candleResponse.json();
-      const tickerPayload = (await tickerResponse.json()) as TickerResponse;
-      const parsedCandles = parseCoinbaseCandles(candlePayload);
-
-      if (parsedCandles.length === 0) {
-        throw new Error("Coinbase returned no BTC-USD candles for this range.");
-      }
-
-      const tickerPrice = Number(tickerPayload.price);
-      setCandles(parsedCandles);
+      const { candles: marketCandles, ticker } = await fetchMarketSnapshot({
+        durationMs: config.durationMs,
+        granularity: config.granularity,
+        product: "BTC-USD",
+        signal,
+      });
+      const tickerPrice = Number(ticker.price);
+      setCandles(marketCandles);
       setLastTickerPrice(
-        Number.isFinite(tickerPrice) ? tickerPrice : parsedCandles[parsedCandles.length - 1]?.close ?? null,
+        Number.isFinite(tickerPrice) ? tickerPrice : marketCandles[marketCandles.length - 1]?.close ?? null,
       );
-      setLastUpdated(tickerPayload.time ? new Date(tickerPayload.time) : new Date());
+      setLastUpdated(ticker.time ? new Date(ticker.time) : new Date());
     } catch (loadError) {
       if (signal?.aborted) {
         return;
