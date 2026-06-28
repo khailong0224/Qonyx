@@ -1,0 +1,15 @@
+{
+  "name": "qonyx",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Qonyx AI quantitative trading command center.",
+  "workspaces": [
+    "apps/web"
+  ],
+  "scripts": {
+    "dev": "npm --workspace @qonyx/web run dev",
+    "build": "npm --workspace @qonyx/web run build",
+    "typecheck": "npm --workspace @qonyx/web run typecheck",
+    "preview": "npm --workspace @qonyx/web run preview"
+  }
+}
