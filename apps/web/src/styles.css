@@ -339,7 +339,9 @@ p {
 
 .hero-actions,
 .risk-actions,
-.modal-actions {
+.modal-actions,
+.action-row,
+.bot-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 12px;
@@ -800,6 +802,12 @@ tbody tr:hover {
   margin-bottom: 16px;
 }
 
+.preset-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+}
+
 .strategy-summary {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -809,6 +817,8 @@ tbody tr:hover {
 
 .strategy-summary div,
 .backtest-metric,
+.bot-metric,
+.field-readout,
 .funding-balance {
   display: grid;
   gap: 6px;
@@ -820,6 +830,8 @@ tbody tr:hover {
 
 .strategy-summary span,
 .backtest-metric span,
+.bot-metric span,
+.field-readout span,
 .funding-balance span {
   color: hsl(var(--muted-foreground));
   font-size: 12px;
@@ -827,19 +839,24 @@ tbody tr:hover {
 
 .strategy-summary strong,
 .backtest-metric strong,
+.bot-metric strong,
+.field-readout strong,
 .funding-balance strong {
   color: hsl(var(--foreground));
 }
 
-.backtest-metric strong.profit {
+.backtest-metric strong.profit,
+.bot-metric strong.profit {
   color: hsl(var(--profit));
 }
 
-.backtest-metric strong.loss {
+.backtest-metric strong.loss,
+.bot-metric strong.loss {
   color: hsl(var(--loss));
 }
 
-.backtest-metric strong.warning {
+.backtest-metric strong.warning,
+.bot-metric strong.warning {
   color: hsl(var(--warning));
 }
 
@@ -848,11 +865,138 @@ tbody tr:hover {
   gap: 7px;
 }
 
-.field button {
+.field button,
+.field input,
+.select-control {
   justify-content: space-between;
   min-height: 44px;
   color: hsl(var(--foreground));
   padding: 0 12px;
+}
+
+.field input,
+.select-control {
+  width: 100%;
+  border: 1px solid hsl(var(--border));
+  border-radius: 12px;
+  background: hsl(var(--surface-input));
+}
+
+.field input {
+  outline: none;
+}
+
+.select-control {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.select-control select {
+  width: 100%;
+  min-height: 42px;
+  border: 0;
+  color: hsl(var(--foreground));
+  background: transparent;
+  outline: none;
+  appearance: none;
+}
+
+.select-control svg {
+  pointer-events: none;
+  color: hsl(var(--muted-foreground));
+}
+
+.select-control option {
+  color: hsl(var(--foreground));
+  background: hsl(var(--surface-card));
+}
+
+.preset-card {
+  display: grid;
+  min-height: 128px;
+  gap: 8px;
+  border: 1px solid hsl(var(--border-soft));
+  border-radius: 16px;
+  color: hsl(var(--foreground-secondary));
+  background: rgba(255, 255, 255, 0.025);
+  padding: 14px;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 180ms ease, background 180ms ease, transform 180ms ease;
+}
+
+.preset-card:hover,
+.preset-card.active {
+  transform: translateY(-1px);
+  border-color: rgba(45, 212, 191, 0.32);
+  background: rgba(45, 212, 191, 0.065);
+}
+
+.preset-card span,
+.preset-card em {
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  font-style: normal;
+}
+
+.preset-card strong {
+  color: hsl(var(--foreground));
+}
+
+.bot-hero-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(320px, 0.7fr);
+  gap: 20px;
+}
+
+.bot-summary-grid,
+.bot-stat-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.bot-summary-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.bot-stat-grid {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+.bot-list {
+  display: grid;
+  gap: 14px;
+}
+
+.bot-row {
+  display: grid;
+  gap: 14px;
+  border: 1px solid hsl(var(--border-soft));
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.025);
+  padding: 16px;
+}
+
+.bot-main,
+.bot-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.bot-main {
+  justify-content: space-between;
+}
+
+.bot-main p {
+  margin: 6px 0 0;
+  color: hsl(var(--muted-foreground));
+  font-size: 13px;
+}
+
+.bot-actions {
+  justify-content: flex-end;
 }
 
 .segmented {
@@ -1128,11 +1272,18 @@ tbody tr:hover {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
+  .bot-summary-grid,
+  .bot-stat-grid,
+  .preset-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
   .dashboard-grid,
   .lower-grid,
   .lab-grid,
   .risk-grid,
-  .exchange-grid {
+  .exchange-grid,
+  .bot-hero-grid {
     grid-template-columns: 1fr;
   }
 
@@ -1225,6 +1376,12 @@ tbody tr:hover {
   .backtest-metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .bot-summary-grid,
+  .bot-stat-grid,
+  .preset-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 560px) {
@@ -1233,6 +1390,9 @@ tbody tr:hover {
   }
 
   .backtest-metrics,
+  .bot-summary-grid,
+  .bot-stat-grid,
+  .preset-grid,
   .strategy-summary {
     grid-template-columns: 1fr;
   }
@@ -1246,6 +1406,8 @@ tbody tr:hover {
   }
 
   .hero-actions,
+  .action-row,
+  .bot-actions,
   .risk-actions,
   .modal-actions {
     display: grid;

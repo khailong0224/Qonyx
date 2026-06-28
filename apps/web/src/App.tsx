@@ -28,13 +28,44 @@ import {
 import type { LucideIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
-type View = "dashboard" | "strategy" | "research" | "risk" | "exchange";
+type View = "dashboard" | "strategy" | "bots" | "research" | "risk" | "exchange";
 type BadgeVariant = "active" | "paused" | "risk" | "paper" | "ai" | "neutral";
 type ChartWindow = "1D" | "1W" | "1M";
-type MarketProduct = "BTC-USD" | "ETH-USD" | "SOL-USD";
-type SignalType = "VWAP Reclaim" | "Momentum Breakout" | "Mean Reversion";
+type MarketProduct =
+  | "BTC-USD"
+  | "ETH-USD"
+  | "SOL-USD"
+  | "XRP-USD"
+  | "DOGE-USD"
+  | "ADA-USD"
+  | "AVAX-USD"
+  | "LINK-USD";
+type SignalType =
+  | "VWAP Reclaim"
+  | "Momentum Breakout"
+  | "Mean Reversion"
+  | "Dynamic Grid"
+  | "RSI Bollinger Reversion"
+  | "MACD Trend Pullback"
+  | "Funding Carry"
+  | "Pairs Stat Arb"
+  | "DCA Rebalance"
+  | "Market Making Spread"
+  | "Liquidity Breakout";
 type RiskProfile = "Conservative" | "Balanced" | "Aggressive";
 type BacktestStatus = "idle" | "running" | "ready" | "error";
+type BotStatus = "Active" | "Paused" | "Paper";
+type StrategyPresetId =
+  | "adaptive-trend"
+  | "dynamic-grid"
+  | "vwap-reclaim"
+  | "rsi-bollinger"
+  | "macd-pullback"
+  | "funding-carry"
+  | "pairs-stat-arb"
+  | "dca-rebalance"
+  | "market-maker"
+  | "liquidity-breakout";
 
 type MarketCandle = {
   time: number;
@@ -62,6 +93,7 @@ type ChartPoint = {
 type StrategyConfig = {
   market: MarketProduct;
   signal: SignalType;
+  strategyId: StrategyPresetId;
   riskProfile: RiskProfile;
 };
 
@@ -95,9 +127,37 @@ type AiBrief = {
   confidence: string;
 };
 
+type StrategyPreset = {
+  id: StrategyPresetId;
+  name: string;
+  signal: SignalType;
+  market: MarketProduct;
+  riskProfile: RiskProfile;
+  allocation: number;
+  category: string;
+  fit: string;
+  regime: string;
+  note: string;
+};
+
+type TradingBot = {
+  id: string;
+  allocation: number;
+  lastAction: string;
+  market: MarketProduct;
+  name: string;
+  platform: string;
+  pnl: number;
+  pnlPct: number;
+  runtimeHours: number;
+  status: BotStatus;
+  strategyId: StrategyPresetId;
+};
+
 const navItems: Array<{ id: View; label: string; icon: LucideIcon }> = [
   { id: "dashboard", label: "Command", icon: BarChart3 },
   { id: "strategy", label: "Strategy Lab", icon: Layers3 },
+  { id: "bots", label: "Bots", icon: Bot },
   { id: "research", label: "AI Research", icon: BrainCircuit },
   { id: "risk", label: "Risk Center", icon: ShieldAlert },
   { id: "exchange", label: "Exchanges", icon: PlugZap },
@@ -131,6 +191,176 @@ const metrics = [
     trend: "-0.6%",
     tone: "warning",
     icon: TrendingDown,
+  },
+];
+
+const strategyPresets: StrategyPreset[] = [
+  {
+    allocation: 10000,
+    category: "Trend",
+    fit: "High",
+    id: "adaptive-trend",
+    market: "BTC-USD",
+    name: "Adaptive Trend Rider",
+    note: "Follows confirmed directional moves and cuts exposure when the slow trend breaks.",
+    regime: "Strong directional markets",
+    riskProfile: "Balanced",
+    signal: "Momentum Breakout",
+  },
+  {
+    allocation: 7500,
+    category: "Grid",
+    fit: "High",
+    id: "dynamic-grid",
+    market: "ETH-USD",
+    name: "Dynamic Grid Range",
+    note: "Builds around range volatility and avoids chasing when price expands too fast.",
+    regime: "Sideways volatile markets",
+    riskProfile: "Conservative",
+    signal: "Dynamic Grid",
+  },
+  {
+    allocation: 6000,
+    category: "Intraday",
+    fit: "Medium",
+    id: "vwap-reclaim",
+    market: "BTC-USD",
+    name: "VWAP Reclaim Scalp",
+    note: "Looks for price reclaiming volume-weighted fair value after a flush.",
+    regime: "Liquid intraday reversals",
+    riskProfile: "Conservative",
+    signal: "VWAP Reclaim",
+  },
+  {
+    allocation: 6500,
+    category: "Mean reversion",
+    fit: "Medium",
+    id: "rsi-bollinger",
+    market: "SOL-USD",
+    name: "RSI Bollinger Reversion",
+    note: "Buys stretched pullbacks only after sellers show exhaustion.",
+    regime: "Choppy mean-reverting markets",
+    riskProfile: "Balanced",
+    signal: "RSI Bollinger Reversion",
+  },
+  {
+    allocation: 8000,
+    category: "Trend",
+    fit: "Medium",
+    id: "macd-pullback",
+    market: "ETH-USD",
+    name: "MACD Trend Pullback",
+    note: "Uses fast/slow average recovery as a simple MACD-style continuation filter.",
+    regime: "Trending markets with pullbacks",
+    riskProfile: "Balanced",
+    signal: "MACD Trend Pullback",
+  },
+  {
+    allocation: 12000,
+    category: "Carry",
+    fit: "Specialist",
+    id: "funding-carry",
+    market: "BTC-USD",
+    name: "Funding Carry Monitor",
+    note: "Keeps spot-style trend confirmation around a market-neutral funding idea.",
+    regime: "Positive funding/carry windows",
+    riskProfile: "Conservative",
+    signal: "Funding Carry",
+  },
+  {
+    allocation: 7000,
+    category: "Stat arb",
+    fit: "Specialist",
+    id: "pairs-stat-arb",
+    market: "ETH-USD",
+    name: "Pairs Stat Arb",
+    note: "Treats sharp deviations from slow fair value as pair-style reversion candidates.",
+    regime: "Correlated majors diverging",
+    riskProfile: "Balanced",
+    signal: "Pairs Stat Arb",
+  },
+  {
+    allocation: 5000,
+    category: "Accumulation",
+    fit: "High",
+    id: "dca-rebalance",
+    market: "BTC-USD",
+    name: "DCA Rebalance",
+    note: "Adds smaller entries during weakness and exits only after a recovery threshold.",
+    regime: "Long-term accumulation",
+    riskProfile: "Conservative",
+    signal: "DCA Rebalance",
+  },
+  {
+    allocation: 9000,
+    category: "Market making",
+    fit: "Specialist",
+    id: "market-maker",
+    market: "ETH-USD",
+    name: "Market Making Spread",
+    note: "Simulates buying lower-half range dips and flattening near fair value.",
+    regime: "High-liquidity tight spreads",
+    riskProfile: "Conservative",
+    signal: "Market Making Spread",
+  },
+  {
+    allocation: 6500,
+    category: "Breakout",
+    fit: "Medium",
+    id: "liquidity-breakout",
+    market: "SOL-USD",
+    name: "Liquidity Breakout",
+    note: "Requires a range break plus volume confirmation to avoid weak breakouts.",
+    regime: "Expansion after compression",
+    riskProfile: "Aggressive",
+    signal: "Liquidity Breakout",
+  },
+];
+
+const presetById = Object.fromEntries(strategyPresets.map((preset) => [preset.id, preset])) as Record<
+  StrategyPresetId,
+  StrategyPreset
+>;
+
+const initialBots: TradingBot[] = [
+  {
+    allocation: 12500,
+    id: "bot-onyx-trend",
+    lastAction: "12m ago",
+    market: "BTC-USD",
+    name: "Onyx Trend Alpha",
+    platform: "Coinbase Paper",
+    pnl: 842,
+    pnlPct: 0.0674,
+    runtimeHours: 74,
+    status: "Active",
+    strategyId: "adaptive-trend",
+  },
+  {
+    allocation: 9000,
+    id: "bot-eth-grid",
+    lastAction: "34m ago",
+    market: "ETH-USD",
+    name: "ETH Dynamic Grid",
+    platform: "Qonyx Paper",
+    pnl: 318,
+    pnlPct: 0.0353,
+    runtimeHours: 41,
+    status: "Paper",
+    strategyId: "dynamic-grid",
+  },
+  {
+    allocation: 6000,
+    id: "bot-sol-reversion",
+    lastAction: "1h ago",
+    market: "SOL-USD",
+    name: "SOL Reversion Guard",
+    platform: "Qonyx Paper",
+    pnl: -96,
+    pnlPct: -0.016,
+    runtimeHours: 18,
+    status: "Paused",
+    strategyId: "rsi-bollinger",
   },
 ];
 
@@ -183,9 +413,21 @@ const marketWindowConfig: Record<ChartWindow, { durationMs: number; granularity:
 };
 
 const strategyOptions = {
-  markets: ["BTC-USD", "ETH-USD", "SOL-USD"] as MarketProduct[],
+  markets: ["BTC-USD", "ETH-USD", "SOL-USD", "XRP-USD", "DOGE-USD", "ADA-USD", "AVAX-USD", "LINK-USD"] as MarketProduct[],
   riskProfiles: ["Conservative", "Balanced", "Aggressive"] as RiskProfile[],
-  signals: ["VWAP Reclaim", "Momentum Breakout", "Mean Reversion"] as SignalType[],
+  signals: [
+    "Momentum Breakout",
+    "Dynamic Grid",
+    "VWAP Reclaim",
+    "RSI Bollinger Reversion",
+    "MACD Trend Pullback",
+    "Funding Carry",
+    "Pairs Stat Arb",
+    "DCA Rebalance",
+    "Market Making Spread",
+    "Liquidity Breakout",
+    "Mean Reversion",
+  ] as SignalType[],
 };
 
 const riskProfileConfig: Record<RiskProfile, { maxPosition: number; stopLoss: number; takeProfit: number }> = {
@@ -220,9 +462,26 @@ function productToDisplay(product: MarketProduct) {
   return product.replace("-", "/");
 }
 
-function cycleValue<T>(values: readonly T[], current: T) {
-  const index = values.findIndex((value) => value === current);
-  return values[(index + 1) % values.length];
+function formatRuntime(hours: number) {
+  if (hours < 24) {
+    return `${hours}h`;
+  }
+
+  const days = Math.floor(hours / 24);
+  const remainingHours = hours % 24;
+  return remainingHours > 0 ? `${days}d ${remainingHours}h` : `${days}d`;
+}
+
+function botStatusVariant(status: BotStatus): BadgeVariant {
+  if (status === "Active") {
+    return "active";
+  }
+
+  if (status === "Paper") {
+    return "paper";
+  }
+
+  return "paused";
 }
 
 async function fetchCoinbaseCandles({
@@ -351,6 +610,44 @@ function rollingVwap(candles: MarketCandle[], endIndex: number, length: number) 
   }, 0) / volume;
 }
 
+function recentVolatility(candles: MarketCandle[], endIndex: number, length: number) {
+  const start = Math.max(1, endIndex - length + 1);
+  const returns = candles.slice(start, endIndex + 1).map((candle, index, slice) => {
+    const previous = index === 0 ? candles[start - 1] : slice[index - 1];
+    return previous ? Math.abs((candle.close - previous.close) / previous.close) : 0;
+  });
+
+  return average(returns);
+}
+
+function relativeStrengthIndex(candles: MarketCandle[], endIndex: number, length: number) {
+  if (endIndex < length) {
+    return 50;
+  }
+
+  let gains = 0;
+  let losses = 0;
+
+  for (let index = endIndex - length + 1; index <= endIndex; index += 1) {
+    const previous = candles[index - 1];
+    const current = candles[index];
+    const move = current.close - previous.close;
+
+    if (move >= 0) {
+      gains += move;
+    } else {
+      losses += Math.abs(move);
+    }
+  }
+
+  if (losses === 0) {
+    return 100;
+  }
+
+  const relativeStrength = gains / losses;
+  return 100 - 100 / (1 + relativeStrength);
+}
+
 function shouldEnterTrade(candles: MarketCandle[], index: number, signal: SignalType) {
   const candle = candles[index];
   const previous = candles[index - 1];
@@ -366,6 +663,12 @@ function shouldEnterTrade(candles: MarketCandle[], index: number, signal: Signal
   const currentVwap = rollingVwap(candles, index, 8);
   const previousVwap = rollingVwap(candles, index - 1, 8);
   const priorHigh = Math.max(...candles.slice(index - 8, index).map((item) => item.high));
+  const recentLows = candles.slice(index - 8, index).map((item) => item.low);
+  const priorLow = Math.min(...recentLows);
+  const recentRange = (priorHigh - priorLow) / slowAverage;
+  const recentVolume = average(candles.slice(index - 8, index).map((item) => item.volume));
+  const currentRsi = relativeStrengthIndex(candles, index, 10);
+  const volatility = recentVolatility(candles, index, 10);
 
   if (signal === "VWAP Reclaim") {
     return previous.close <= previousVwap && candle.close > currentVwap && fastAverage >= slowAverage;
@@ -375,10 +678,52 @@ function shouldEnterTrade(candles: MarketCandle[], index: number, signal: Signal
     return candle.close > priorHigh && fastAverage > slowAverage;
   }
 
+  if (signal === "Dynamic Grid") {
+    const rangeMidpoint = (priorHigh + priorLow) / 2;
+    return recentRange > 0.025 && candle.close < rangeMidpoint && candle.close > priorLow * 1.006;
+  }
+
+  if (signal === "RSI Bollinger Reversion") {
+    const stretch = candle.close < slowAverage * 0.975;
+    return currentRsi < 38 && stretch && candle.close > candle.open;
+  }
+
+  if (signal === "MACD Trend Pullback") {
+    return fastAverage > slowAverage && previous.close < fastAverage && candle.close > fastAverage;
+  }
+
+  if (signal === "Funding Carry") {
+    return fastAverage >= slowAverage && volatility < 0.022 && candle.close > currentVwap;
+  }
+
+  if (signal === "Pairs Stat Arb") {
+    return candle.close < slowAverage * 0.985 && currentRsi < 45;
+  }
+
+  if (signal === "DCA Rebalance") {
+    return index % 8 === 0 && candle.close < slowAverage * 1.01;
+  }
+
+  if (signal === "Market Making Spread") {
+    const rangeMidpoint = (priorHigh + priorLow) / 2;
+    return volatility < 0.03 && candle.close < rangeMidpoint * 0.995 && candle.close > priorLow;
+  }
+
+  if (signal === "Liquidity Breakout") {
+    return candle.close > priorHigh && candle.volume > recentVolume * 1.2 && fastAverage > slowAverage;
+  }
+
   return candle.close < slowAverage * 0.982 && candle.close > candle.open;
 }
 
-function shouldExitTrade(candles: MarketCandle[], index: number, signal: SignalType, entryPrice: number, riskProfile: RiskProfile) {
+function shouldExitTrade(
+  candles: MarketCandle[],
+  index: number,
+  signal: SignalType,
+  entryPrice: number,
+  riskProfile: RiskProfile,
+  entryIndex: number,
+) {
   const candle = candles[index];
   const config = riskProfileConfig[riskProfile];
   const stopPrice = entryPrice * (1 - config.stopLoss);
@@ -394,6 +739,7 @@ function shouldExitTrade(candles: MarketCandle[], index: number, signal: SignalT
 
   const slowAverage = average(candles.slice(Math.max(0, index - 10), index + 1).map((item) => item.close));
   const currentVwap = rollingVwap(candles, index, 8);
+  const holdBars = index - entryIndex;
 
   if (signal === "VWAP Reclaim" && candle.close < currentVwap) {
     return { price: candle.close, reason: "VWAP lost" };
@@ -407,6 +753,38 @@ function shouldExitTrade(candles: MarketCandle[], index: number, signal: SignalT
     return { price: candle.close, reason: "Mean reached" };
   }
 
+  if (signal === "Dynamic Grid" && candle.close >= slowAverage) {
+    return { price: candle.close, reason: "Grid midpoint" };
+  }
+
+  if (signal === "RSI Bollinger Reversion" && (candle.close >= slowAverage || holdBars >= 8)) {
+    return { price: candle.close, reason: "Reversion reached" };
+  }
+
+  if (signal === "MACD Trend Pullback" && candle.close < slowAverage) {
+    return { price: candle.close, reason: "Trend failed" };
+  }
+
+  if (signal === "Funding Carry" && (candle.close < currentVwap || holdBars >= 10)) {
+    return { price: candle.close, reason: "Carry window closed" };
+  }
+
+  if (signal === "Pairs Stat Arb" && candle.close >= slowAverage) {
+    return { price: candle.close, reason: "Spread normalized" };
+  }
+
+  if (signal === "DCA Rebalance" && holdBars >= 6 && candle.close > entryPrice * 1.012) {
+    return { price: candle.close, reason: "Rebalance profit" };
+  }
+
+  if (signal === "Market Making Spread" && (candle.close >= slowAverage || holdBars >= 5)) {
+    return { price: candle.close, reason: "Spread captured" };
+  }
+
+  if (signal === "Liquidity Breakout" && candle.close < slowAverage) {
+    return { price: candle.close, reason: "Breakout failed" };
+  }
+
   return null;
 }
 
@@ -417,13 +795,14 @@ function runBacktest(candles: MarketCandle[], strategy: StrategyConfig, initialC
   let equity = initialCapital;
   let peakEquity = initialCapital;
   let maxDrawdown = 0;
-  let openTrade: { entryPrice: number; entryTime: number; size: number } | null = null;
+  let openTrade: { entryIndex: number; entryPrice: number; entryTime: number; size: number } | null = null;
 
   for (let index = 12; index < candles.length; index += 1) {
     const candle = candles[index];
 
     if (!openTrade && shouldEnterTrade(candles, index, strategy.signal)) {
       openTrade = {
+        entryIndex: index,
         entryPrice: candle.close,
         entryTime: candle.time,
         size: equity * config.maxPosition,
@@ -432,7 +811,14 @@ function runBacktest(candles: MarketCandle[], strategy: StrategyConfig, initialC
     }
 
     if (openTrade) {
-      const exit = shouldExitTrade(candles, index, strategy.signal, openTrade.entryPrice, strategy.riskProfile);
+      const exit = shouldExitTrade(
+        candles,
+        index,
+        strategy.signal,
+        openTrade.entryPrice,
+        strategy.riskProfile,
+        openTrade.entryIndex,
+      );
       const isLastCandle = index === candles.length - 1;
 
       if (exit || isLastCandle) {
@@ -489,6 +875,7 @@ export function App() {
   const [tradingLocked, setTradingLocked] = useState(false);
   const [paperCapital, setPaperCapital] = useState(10000);
   const [connectedExchange, setConnectedExchange] = useState(false);
+  const [bots, setBots] = useState<TradingBot[]>(initialBots);
 
   const activeTitle = useMemo(
     () => navItems.find((item) => item.id === activeView)?.label ?? "Command",
@@ -509,6 +896,50 @@ export function App() {
     if (matchedNav) {
       setActiveView(matchedNav.id);
     }
+  };
+
+  const handleCreateBot = (strategy: StrategyConfig, allocation: number) => {
+    const preset = presetById[strategy.strategyId];
+    const createdAt = Date.now();
+
+    setBots((current) => [
+      {
+        allocation,
+        id: `bot-${strategy.strategyId}-${createdAt}`,
+        lastAction: "Just now",
+        market: strategy.market,
+        name: `${productToDisplay(strategy.market)} ${preset.name}`,
+        platform: connectedExchange ? "Coinbase Paper" : "Qonyx Paper",
+        pnl: 0,
+        pnlPct: 0,
+        runtimeHours: 0,
+        status: connectedExchange ? "Active" : "Paper",
+        strategyId: strategy.strategyId,
+      },
+      ...current,
+    ]);
+    setPaperMode(true);
+    setActiveView("bots");
+  };
+
+  const handleBotStatusChange = (botId: string, status: BotStatus) => {
+    setBots((current) =>
+      current.map((bot) => (bot.id === botId ? { ...bot, lastAction: "Just now", status } : bot)),
+    );
+  };
+
+  const handleBotAllocationChange = (botId: string, change: number) => {
+    setBots((current) =>
+      current.map((bot) =>
+        bot.id === botId
+          ? {
+              ...bot,
+              allocation: Math.max(1000, bot.allocation + change),
+              lastAction: "Just now",
+            }
+          : bot,
+      ),
+    );
   };
 
   return (
@@ -533,6 +964,7 @@ export function App() {
         <main className="content-shell">
           {activeView === "dashboard" && (
             <DashboardView
+              bots={bots}
               paperMode={paperMode}
               tradingLocked={tradingLocked}
               onOpenResearch={() => setActiveView("research")}
@@ -540,7 +972,23 @@ export function App() {
               onConfirmKill={() => setKillConfirmOpen(true)}
             />
           )}
-          {activeView === "strategy" && <StrategyLabView paperCapital={paperCapital} />}
+          {activeView === "strategy" && (
+            <StrategyLabView
+              connectedExchange={connectedExchange}
+              onCreateBot={handleCreateBot}
+              paperCapital={paperCapital}
+            />
+          )}
+          {activeView === "bots" && (
+            <BotControlView
+              bots={bots}
+              connectedExchange={connectedExchange}
+              onAllocate={handleBotAllocationChange}
+              onConnectExchange={() => setConnectedExchange(true)}
+              onOpenStrategy={() => setActiveView("strategy")}
+              onStatusChange={handleBotStatusChange}
+            />
+          )}
           {activeView === "research" && <AIResearchView />}
           {activeView === "risk" && (
             <RiskCenterView
@@ -580,18 +1028,44 @@ export function App() {
 }
 
 function DashboardView({
+  bots,
   paperMode,
   tradingLocked,
   onOpenResearch,
   onOpenRisk,
   onConfirmKill,
 }: {
+  bots: TradingBot[];
   paperMode: boolean;
   tradingLocked: boolean;
   onOpenResearch: () => void;
   onOpenRisk: () => void;
   onConfirmKill: () => void;
 }) {
+  const activeBots = bots.filter((bot) => bot.status === "Active");
+  const totalAllocation = bots.reduce((sum, bot) => sum + bot.allocation, 0);
+  const totalPnl = bots.reduce((sum, bot) => sum + bot.pnl, 0);
+  const dynamicMetrics = metrics.map((metric) => {
+    if (metric.label === "Portfolio Value") {
+      return { ...metric, trend: `${bots.length} bots`, value: currencyFormatter.format(totalAllocation) };
+    }
+
+    if (metric.label === "Daily PnL") {
+      return {
+        ...metric,
+        tone: totalPnl >= 0 ? "profit" : "loss",
+        trend: totalPnl >= 0 ? "Sim gain" : "Sim loss",
+        value: currencyFormatter.format(totalPnl),
+      };
+    }
+
+    if (metric.label === "Active Strategies") {
+      return { ...metric, trend: `${bots.length} total`, value: String(activeBots.length) };
+    }
+
+    return metric;
+  });
+
   return (
     <div className="view-stack">
       <OnboardingPanel
@@ -601,7 +1075,7 @@ function DashboardView({
         onOpenRisk={onOpenRisk}
       />
       <section className="metric-grid" aria-label="Trading metrics">
-        {metrics.map((metric) => (
+        {dynamicMetrics.map((metric) => (
           <MetricCard key={metric.label} {...metric} />
         ))}
       </section>
@@ -681,17 +1155,28 @@ function OnboardingPanel({
   );
 }
 
-function StrategyLabView({ paperCapital }: { paperCapital: number }) {
+function StrategyLabView({
+  connectedExchange,
+  onCreateBot,
+  paperCapital,
+}: {
+  connectedExchange: boolean;
+  onCreateBot: (strategy: StrategyConfig, allocation: number) => void;
+  paperCapital: number;
+}) {
   const [strategy, setStrategy] = useState<StrategyConfig>({
     market: "BTC-USD",
-    riskProfile: "Conservative",
-    signal: "VWAP Reclaim",
+    riskProfile: "Balanced",
+    strategyId: "adaptive-trend",
+    signal: "Momentum Breakout",
   });
+  const [allocation, setAllocation] = useState(5000);
   const [draftReady, setDraftReady] = useState(false);
   const [backtestStatus, setBacktestStatus] = useState<BacktestStatus>("idle");
   const [backtestError, setBacktestError] = useState<string | null>(null);
   const [backtestResult, setBacktestResult] = useState<BacktestResult | null>(null);
   const riskConfig = riskProfileConfig[strategy.riskProfile];
+  const selectedPreset = presetById[strategy.strategyId];
 
   const updateStrategy = <K extends keyof StrategyConfig>(key: K, value: StrategyConfig[K]) => {
     setDraftReady(true);
@@ -699,6 +1184,30 @@ function StrategyLabView({ paperCapital }: { paperCapital: number }) {
     setBacktestResult(null);
     setBacktestError(null);
     setStrategy((current) => ({ ...current, [key]: value }));
+  };
+
+  const applyPreset = (presetId: StrategyPresetId) => {
+    const preset = presetById[presetId];
+    setDraftReady(true);
+    setBacktestStatus("idle");
+    setBacktestResult(null);
+    setBacktestError(null);
+    setAllocation(Math.min(Math.max(1000, preset.allocation), paperCapital));
+    setStrategy({
+      market: preset.market,
+      riskProfile: preset.riskProfile,
+      signal: preset.signal,
+      strategyId: preset.id,
+    });
+  };
+
+  const handleAllocationChange = (value: string) => {
+    const parsedValue = Number(value);
+    if (!Number.isFinite(parsedValue)) {
+      return;
+    }
+
+    setAllocation(Math.max(1000, Math.min(paperCapital, parsedValue)));
   };
 
   const handleRunBacktest = async () => {
@@ -712,12 +1221,17 @@ function StrategyLabView({ paperCapital }: { paperCapital: number }) {
         granularity: 21600,
         product: strategy.market,
       });
-      setBacktestResult(runBacktest(candles, strategy, paperCapital));
+      setBacktestResult(runBacktest(candles, strategy, allocation));
       setBacktestStatus("ready");
     } catch (error) {
       setBacktestError(error instanceof Error ? error.message : "Unable to run paper backtest.");
       setBacktestStatus("error");
     }
+  };
+
+  const handleCreateBot = () => {
+    setDraftReady(true);
+    onCreateBot(strategy, allocation);
   };
 
   return (
@@ -727,35 +1241,70 @@ function StrategyLabView({ paperCapital }: { paperCapital: number }) {
           <div className="section-heading">
             <div>
               <p className="eyebrow">Strategy Lab</p>
-              <h2>Momentum Builder</h2>
+              <h2>Preset Builder</h2>
             </div>
             <StatusBadge variant={draftReady ? "paper" : "neutral"}>{draftReady ? "Draft Ready" : "Draft"}</StatusBadge>
           </div>
           <div className="control-grid">
-            <OptionField
+            <SelectField
+              label="Preset"
+              value={strategy.strategyId}
+              onChange={(value) => applyPreset(value as StrategyPresetId)}
+            >
+              {strategyPresets.map((preset) => (
+                <option key={preset.id} value={preset.id}>
+                  {preset.name}
+                </option>
+              ))}
+            </SelectField>
+            <SelectField
               label="Market"
-              value={productToDisplay(strategy.market)}
-              onClick={() => updateStrategy("market", cycleValue(strategyOptions.markets, strategy.market))}
-            />
-            <OptionField
+              value={strategy.market}
+              onChange={(value) => updateStrategy("market", value as MarketProduct)}
+            >
+              {strategyOptions.markets.map((market) => (
+                <option key={market} value={market}>
+                  {productToDisplay(market)}
+                </option>
+              ))}
+            </SelectField>
+            <SelectField
               label="Signal"
               value={strategy.signal}
-              onClick={() => updateStrategy("signal", cycleValue(strategyOptions.signals, strategy.signal))}
-            />
-            <OptionField
-              label="Max Position"
-              value={plainPercentFormatter.format(riskConfig.maxPosition)}
-              onClick={() =>
-                updateStrategy("riskProfile", cycleValue(strategyOptions.riskProfiles, strategy.riskProfile))
-              }
-            />
-            <OptionField
-              label="Stop Loss"
-              value={plainPercentFormatter.format(riskConfig.stopLoss)}
-              onClick={() =>
-                updateStrategy("riskProfile", cycleValue(strategyOptions.riskProfiles, strategy.riskProfile))
-              }
-            />
+              onChange={(value) => updateStrategy("signal", value as SignalType)}
+            >
+              {strategyOptions.signals.map((signal) => (
+                <option key={signal} value={signal}>
+                  {signal}
+                </option>
+              ))}
+            </SelectField>
+            <SelectField
+              label="Risk Profile"
+              value={strategy.riskProfile}
+              onChange={(value) => updateStrategy("riskProfile", value as RiskProfile)}
+            >
+              {strategyOptions.riskProfiles.map((profile) => (
+                <option key={profile} value={profile}>
+                  {profile}
+                </option>
+              ))}
+            </SelectField>
+            <label className="field">
+              <span>Bot Allocation</span>
+              <input
+                min={1000}
+                max={paperCapital}
+                step={500}
+                type="number"
+                value={allocation}
+                onChange={(event) => handleAllocationChange(event.target.value)}
+              />
+            </label>
+            <div className="field-readout">
+              <span>Connected Platform</span>
+              <strong>{connectedExchange ? "Coinbase Paper" : "Qonyx Paper"}</strong>
+            </div>
           </div>
           <div className="segmented" role="tablist" aria-label="Risk profile">
             {strategyOptions.riskProfiles.map((profile) => (
@@ -771,31 +1320,72 @@ function StrategyLabView({ paperCapital }: { paperCapital: number }) {
           </div>
           <div className="strategy-summary">
             <div>
-              <span>Paper capital</span>
-              <strong>{currencyFormatter.format(paperCapital)}</strong>
+              <span>Preset type</span>
+              <strong>{selectedPreset.category}</strong>
+            </div>
+            <div>
+              <span>Max position</span>
+              <strong>{plainPercentFormatter.format(riskConfig.maxPosition)}</strong>
+            </div>
+            <div>
+              <span>Stop loss</span>
+              <strong>{plainPercentFormatter.format(riskConfig.stopLoss)}</strong>
             </div>
             <div>
               <span>Take profit</span>
               <strong>{plainPercentFormatter.format(riskConfig.takeProfit)}</strong>
             </div>
           </div>
-          <button
-            className="btn btn-primary full-width"
-            type="button"
-            disabled={backtestStatus === "running"}
-            onClick={handleRunBacktest}
-          >
-            {backtestStatus === "running" ? <Activity size={18} /> : <Play size={18} />}
-            {backtestStatus === "running" ? "Running Backtest" : "Start Paper Backtest"}
-          </button>
+          <div className="action-row">
+            <button
+              className="btn btn-primary"
+              type="button"
+              disabled={backtestStatus === "running"}
+              onClick={handleRunBacktest}
+            >
+              {backtestStatus === "running" ? <Activity size={18} /> : <Play size={18} />}
+              {backtestStatus === "running" ? "Running Backtest" : "Start Backtest"}
+            </button>
+            <button className="btn btn-secondary" type="button" onClick={handleCreateBot}>
+              <Bot size={18} />
+              Create Bot
+            </button>
+          </div>
         </OnyxCard>
-        <EmptyState
-          title="Create your first Qonyx strategy"
-          body={`${productToDisplay(strategy.market)} ${strategy.signal} is staged with ${strategy.riskProfile.toLowerCase()} risk.`}
-          actionLabel={draftReady ? "Run Backtest" : "Build Strategy"}
-          icon={Layers3}
-          onAction={draftReady ? handleRunBacktest : () => setDraftReady(true)}
-        />
+        <OnyxCard className="preset-detail">
+          <div className="section-heading compact">
+            <div>
+              <p className="eyebrow">Selected Strategy</p>
+              <h2>{selectedPreset.name}</h2>
+            </div>
+            <StatusBadge variant={selectedPreset.fit === "High" ? "active" : "paper"}>{selectedPreset.fit}</StatusBadge>
+          </div>
+          <p>{selectedPreset.note}</p>
+          <div className="strategy-summary">
+            <div>
+              <span>Best regime</span>
+              <strong>{selectedPreset.regime}</strong>
+            </div>
+            <div>
+              <span>Bot capital</span>
+              <strong>{currencyFormatter.format(allocation)}</strong>
+            </div>
+          </div>
+        </OnyxCard>
+      </section>
+      <section className="preset-grid" aria-label="Mainstream strategy presets">
+        {strategyPresets.map((preset) => (
+          <button
+            key={preset.id}
+            className={cn("preset-card", strategy.strategyId === preset.id && "active")}
+            type="button"
+            onClick={() => applyPreset(preset.id)}
+          >
+            <span>{preset.category}</span>
+            <strong>{preset.name}</strong>
+            <em>{preset.regime}</em>
+          </button>
+        ))}
       </section>
       <OnyxCard className="backtest-card">
         <div className="section-heading">
@@ -852,6 +1442,152 @@ function StrategyLabView({ paperCapital }: { paperCapital: number }) {
         )}
         {backtestStatus === "ready" && backtestResult && <BacktestResultPanel result={backtestResult} />}
       </OnyxCard>
+    </div>
+  );
+}
+
+function BotControlView({
+  bots,
+  connectedExchange,
+  onAllocate,
+  onConnectExchange,
+  onOpenStrategy,
+  onStatusChange,
+}: {
+  bots: TradingBot[];
+  connectedExchange: boolean;
+  onAllocate: (botId: string, change: number) => void;
+  onConnectExchange: () => void;
+  onOpenStrategy: () => void;
+  onStatusChange: (botId: string, status: BotStatus) => void;
+}) {
+  const activeBots = bots.filter((bot) => bot.status === "Active");
+  const totalAllocation = bots.reduce((sum, bot) => sum + bot.allocation, 0);
+  const totalPnl = bots.reduce((sum, bot) => sum + bot.pnl, 0);
+  const bestBot = bots.reduce<TradingBot | null>((best, bot) => (!best || bot.pnl > best.pnl ? bot : best), null);
+
+  return (
+    <div className="view-stack">
+      <section className="bot-hero-grid">
+        <OnyxCard className="bot-command-panel">
+          <div className="section-heading">
+            <div>
+              <p className="eyebrow">Bot Control</p>
+              <h2>Connected Bot Stack</h2>
+            </div>
+            <StatusBadge variant={connectedExchange ? "active" : "paper"}>
+              {connectedExchange ? "Exchange Connected" : "Paper Mode"}
+            </StatusBadge>
+          </div>
+          <div className="bot-summary-grid">
+            <BotMetric label="Bots" value={`${activeBots.length}/${bots.length}`} />
+            <BotMetric label="Allocated" value={currencyFormatter.format(totalAllocation)} />
+            <BotMetric
+              label="PnL"
+              tone={totalPnl >= 0 ? "profit" : "loss"}
+              value={currencyFormatter.format(totalPnl)}
+            />
+            <BotMetric label="Best Bot" value={bestBot ? bestBot.name : "None"} />
+          </div>
+        </OnyxCard>
+        <OnyxCard className="platform-card">
+          <div className="section-heading compact">
+            <div>
+              <p className="eyebrow">Platform</p>
+              <h2>{connectedExchange ? "Coinbase Paper" : "Qonyx Paper"}</h2>
+            </div>
+            <PlugZap size={22} />
+          </div>
+          <p>
+            {connectedExchange
+              ? "Bots are connected to the simulated Coinbase paper venue for controlled testing."
+              : "Connect the paper venue before promoting bots from paper to active."}
+          </p>
+          <button className="btn btn-secondary full-width" type="button" onClick={onConnectExchange}>
+            <PlugZap size={18} />
+            {connectedExchange ? "Connected" : "Connect Paper Venue"}
+          </button>
+        </OnyxCard>
+      </section>
+      <OnyxCard className="bot-table-card">
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">Bot List</p>
+            <h2>Funds, Status, PnL, Runtime</h2>
+          </div>
+          <button className="btn btn-primary" type="button" onClick={onOpenStrategy}>
+            <Layers3 size={18} />
+            New Bot
+          </button>
+        </div>
+        <div className="bot-list">
+          {bots.map((bot) => {
+            const preset = presetById[bot.strategyId];
+            const nextStatus = bot.status === "Active" ? "Paused" : connectedExchange ? "Active" : "Paper";
+            return (
+              <article key={bot.id} className="bot-row">
+                <div className="bot-main">
+                  <div>
+                    <div className="bot-title">
+                      <Bot size={18} />
+                      <strong>{bot.name}</strong>
+                    </div>
+                    <p>{preset.name} / {productToDisplay(bot.market)} / {preset.category}</p>
+                  </div>
+                  <StatusBadge variant={botStatusVariant(bot.status)}>{bot.status}</StatusBadge>
+                </div>
+                <div className="bot-stat-grid">
+                  <BotMetric label="Funds" value={currencyFormatter.format(bot.allocation)} />
+                  <BotMetric
+                    label="PnL"
+                    tone={bot.pnl >= 0 ? "profit" : "loss"}
+                    value={`${currencyFormatter.format(bot.pnl)} (${percentFormatter.format(bot.pnlPct)})`}
+                  />
+                  <BotMetric label="Time" value={formatRuntime(bot.runtimeHours)} />
+                  <BotMetric label="Platform" value={bot.platform} />
+                  <BotMetric label="Last Action" value={bot.lastAction} />
+                  <BotMetric label="Regime" value={preset.regime} />
+                </div>
+                <div className="bot-actions">
+                  <button className="btn btn-secondary" type="button" onClick={() => onAllocate(bot.id, 1000)}>
+                    <CircleDollarSign size={18} />
+                    Add $1k
+                  </button>
+                  <button className="btn btn-secondary" type="button" onClick={() => onAllocate(bot.id, -1000)}>
+                    <CircleDollarSign size={18} />
+                    Trim $1k
+                  </button>
+                  <button
+                    className={cn("btn", bot.status === "Active" ? "btn-danger" : "btn-primary")}
+                    type="button"
+                    onClick={() => onStatusChange(bot.id, nextStatus)}
+                  >
+                    {bot.status === "Active" ? <Pause size={18} /> : <Play size={18} />}
+                    {bot.status === "Active" ? "Pause" : "Activate"}
+                  </button>
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      </OnyxCard>
+    </div>
+  );
+}
+
+function BotMetric({
+  label,
+  tone,
+  value,
+}: {
+  label: string;
+  tone?: "profit" | "loss" | "warning";
+  value: string;
+}) {
+  return (
+    <div className="bot-metric">
+      <span>{label}</span>
+      <strong className={tone}>{value}</strong>
     </div>
   );
 }
@@ -1748,22 +2484,26 @@ function RiskBadge({ locked }: { locked: boolean }) {
   return <StatusBadge variant={locked ? "risk" : "active"}>{locked ? "Blocked" : "Clear"}</StatusBadge>;
 }
 
-function OptionField({
+function SelectField({
+  children,
   label,
-  onClick,
+  onChange,
   value,
 }: {
+  children: React.ReactNode;
   label: string;
-  onClick: () => void;
   value: string;
+  onChange: (value: string) => void;
 }) {
   return (
     <label className="field">
       <span>{label}</span>
-      <button type="button" onClick={onClick}>
-        {value}
+      <div className="select-control">
+        <select value={value} onChange={(event) => onChange(event.target.value)}>
+          {children}
+        </select>
         <ChevronDown size={16} />
-      </button>
+      </div>
     </label>
   );
 }
