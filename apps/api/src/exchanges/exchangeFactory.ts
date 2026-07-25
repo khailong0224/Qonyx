@@ -7,6 +7,7 @@ import type {
 import type { ServerConfig } from "../config.js";
 import type { CredentialVault } from "../services/credentialVault.js";
 import { CcxtExchangeAdapter } from "./ccxtExchange.js";
+import { FundCappedExchangeAdapter } from "./fundCappedExchange.js";
 import { HttpGatewayExchangeAdapter } from "./httpGatewayExchange.js";
 import { PaperExchangeAdapter } from "./paperExchange.js";
 
@@ -84,7 +85,10 @@ export class ExchangeFactory {
       throw new Error(`A matching ${run.platform} exchange connection was not found.`);
     }
 
-    return this.createFromSecret(secret);
+    return new FundCappedExchangeAdapter(
+      this.createFromSecret(secret),
+      run.risk.capitalLimitUsd,
+    );
   }
 
   createFromSecret(secret: ExchangeConnectionSecret): ExchangeAdapter {

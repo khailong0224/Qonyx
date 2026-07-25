@@ -4,6 +4,7 @@ import type {
   AgentRunConfig,
   AiAgentProvider,
   ExchangeAdapter,
+  OrderResult,
 } from "../src/domain.js";
 import { PaperExchangeAdapter } from "../src/exchanges/paperExchange.js";
 import { RoutedAiAgentProvider } from "../src/services/aiProvider.js";
@@ -165,5 +166,96 @@ describe("AgentOrchestrator", () => {
       250,
     );
     expect(openOrders).toEqual([250]);
+  });
+
+  it("cancels again when force stop races an in-flight order submission", async () => {
+    let cancelCount = 0;
+    let markOrderStarted!: () => void;
+    let resolveOrder!: (order: OrderResult) => void;
+    const orderStarted = new Promise<void>((resolve) => {
+      markOrderStarted = resolve;
+    });
+    const pendingOrder = new Promise<OrderResult>((resolve) => {
+      resolveOrder = resolve;
+    });
+    const provider: AiAgentProvider = {
+      analyze: async () => ({
+        confidence: 0.9,
+        direction: "bullish",
+        rationale: "Test",
+        riskFlags: [],
+        signals: ["Test"],
+        summary: "Bullish test",
+      }),
+      report: async () => ({
+        action: "Test",
+        budgetSummary: "Test",
+        headline: "Test",
+        narrative: "Test",
+        riskSummary: "Test",
+      }),
+      trade: async () => ({
+        action: "buy",
+        notionalUsd: 100,
+        orderType: "market",
+        reason: "Stop race test",
+      }),
+    };
+    const adapter: ExchangeAdapter = {
+      cancelAllOrders: async () => {
+        cancelCount += 1;
+      },
+      getAccount: async (symbol) => ({
+        availableCashUsd: 1_000,
+        equityUsd: 1_000,
+        exposureUsd: 0,
+        positionBase: 0,
+        realizedPnlUsd: 0,
+        symbol,
+      }),
+      getMarketSnapshot: async (symbol) => ({
+        ask: 101,
+        bid: 99,
+        changePercent24h: 1,
+        price: 100,
+        symbol,
+        timestamp: new Date().toISOString(),
+        volume24h: 1_000,
+      }),
+      placeOrder: async () => {
+        markOrderStarted();
+        return pendingOrder;
+      },
+      platform: "paper",
+      testConnection: async () => ({ message: "Test", ok: true }),
+    };
+    const orchestrator = new AgentOrchestrator(
+      provider,
+      { createForRun: () => adapter },
+      { autoSchedule: false },
+    );
+    const run = await orchestrator.startRun({ ...runConfig, maxCycles: 0 });
+    const cycle = orchestrator.runOneCycle(run.id);
+
+    await orderStarted;
+    await orchestrator.stopRun(run.id, "Stop during order submission");
+    resolveOrder({
+      action: "buy",
+      amountBase: 1,
+      averagePrice: 100,
+      feeUsd: 0,
+      id: "racing-order",
+      notionalUsd: 100,
+      platform: "paper",
+      requestedNotionalUsd: 100,
+      status: "open",
+      symbol: "BTC/USD",
+      timestamp: new Date().toISOString(),
+    });
+    const stopped = await cycle;
+
+    expect(stopped.status).toBe("stopped");
+    expect(stopped.cycles).toHaveLength(0);
+    expect(cancelCount).toBe(2);
   });
 });

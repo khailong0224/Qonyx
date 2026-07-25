@@ -106,7 +106,17 @@ export class CcxtExchangeAdapter implements ExchangeAdapter {
     await this.#exchange.loadMarkets();
     const market = await this.getMarketSnapshot(symbol);
     const referencePrice = intent.limitPrice || market.price;
-    const rawAmount = intent.notionalUsd / referencePrice;
+    const exchangeMarket = this.#exchange.market(symbol);
+    const configuredFeeRate = numberOrZero(exchangeMarket.taker);
+    const feeRate =
+      configuredFeeRate >= 0 && configuredFeeRate <= 0.05
+        ? configuredFeeRate
+        : 0.002;
+    const spendableNotional =
+      intent.action === "buy"
+        ? intent.notionalUsd / (1 + feeRate)
+        : intent.notionalUsd;
+    const rawAmount = spendableNotional / referencePrice;
     const amount = Number(this.#exchange.amountToPrecision(symbol, rawAmount));
     const price =
       intent.orderType === "limit" && intent.limitPrice
@@ -120,7 +130,9 @@ export class CcxtExchangeAdapter implements ExchangeAdapter {
       price,
     );
     const averagePrice = numberOrZero(order.average) || numberOrZero(order.price) || referencePrice;
-    const filled = numberOrZero(order.filled) || amount;
+    const filled =
+      numberOrZero(order.filled) ||
+      (order.status === "closed" ? amount : 0);
     const feeUsd = numberOrZero(order.fee?.cost);
 
     return {
@@ -131,6 +143,7 @@ export class CcxtExchangeAdapter implements ExchangeAdapter {
       id: order.id || randomUUID(),
       notionalUsd: filled * averagePrice,
       platform: this.platform,
+      requestedNotionalUsd: intent.notionalUsd,
       status:
         order.status === "closed"
           ? "filled"

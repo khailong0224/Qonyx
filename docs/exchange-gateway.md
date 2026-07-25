@@ -62,6 +62,11 @@ GET /account?symbol=BTC%2FUSD
 POST /orders
 ```
 
+For buy orders, `intent.notionalUsd` is the maximum gross quote-currency
+budget, including any broker fee. The gateway must reduce the asset amount as
+needed so the order cannot spend more than that value. Qonyx also keeps a
+per-run ledger and never exposes unrelated account positions to an agent.
+
 ```json
 {
   "symbol": "BTC/USD",

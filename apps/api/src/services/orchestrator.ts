@@ -5,6 +5,7 @@ import type {
   AgentStep,
   AiAgentProvider,
   ExchangeAdapter,
+  OrderResult,
   RunCycle,
   TradingReport,
 } from "../domain.js";
@@ -191,12 +192,21 @@ export class AgentOrchestrator {
         run.config.risk,
         this.#globallyHalted,
       );
-      const order =
-        risk.approved && risk.intent.action !== "hold"
-          ? await resources.adapter.placeOrder(risk.intent, run.config.symbol)
-          : undefined;
+      let order: OrderResult | undefined;
+      if (risk.approved && risk.intent.action !== "hold") {
+        abortController.signal.throwIfAborted();
+        order = await resources.adapter.placeOrder(
+          risk.intent,
+          run.config.symbol,
+        );
+        if (abortController.signal.aborted) {
+          await resources.adapter.cancelAllOrders(run.config.symbol);
+          abortController.signal.throwIfAborted();
+        }
+      }
       if (order?.status === "open" && order.action === "buy") {
-        resources.reservedBuyNotionalUsd += order.notionalUsd;
+        resources.reservedBuyNotionalUsd +=
+          order.requestedNotionalUsd ?? order.notionalUsd;
       }
       const accountAfter = await resources.adapter.getAccount(run.config.symbol);
 

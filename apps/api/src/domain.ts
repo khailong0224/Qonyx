@@ -106,6 +106,7 @@ export type OrderResult = {
   id: string;
   notionalUsd: number;
   platform: ExchangePlatform;
+  requestedNotionalUsd?: number;
   status: "filled" | "open" | "cancelled" | "rejected";
   symbol: string;
   timestamp: string;

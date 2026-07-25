@@ -21,6 +21,7 @@ direct exchange access.
   - Built-in deterministic agents for credential-free sandbox testing.
 - Deterministic safety gate:
   - Hard agent fund ceiling.
+  - Per-run live ledger that excludes positions owned outside Qonyx.
   - Maximum order and position allocation.
   - Daily realized-loss stop.
   - No leverage or short selling.
@@ -80,7 +81,7 @@ No host credential file is mounted by the provided compose configuration.
 npm.cmd run check
 ```
 
-The check gate runs API and web typechecks, 17 tests, and both production builds.
+The check gate runs API and web typechecks, 20 tests, and both production builds.
 
 ## Live exchange opt-in
 

@@ -54,6 +54,12 @@ The paper exchange independently clamps a fill to available cash. This
 defence-in-depth means an invalid caller cannot make the simulated account spend
 past its funded balance.
 
+Every live run also receives its own funded ledger. The risk engine sees only
+cash, positions, and realized P&L created by that run, never unrelated holdings
+from the wider exchange account. CCXT buy sizing reserves the venue's configured
+taker fee inside the approved gross budget. Custom gateways must enforce the
+same gross-budget rule.
+
 ## Force stop
 
 The global stop flag is checked before a run and before every risk decision.
@@ -65,6 +71,10 @@ Activating it:
 4. clears the next-cycle timer;
 5. asks each adapter to cancel open orders;
 6. records the run as stopped.
+
+If an order submission finishes after the first cancellation request, the
+orchestrator detects the aborted signal and cancels open orders again before the
+cycle can continue.
 
 Unlocking removes the global flag but never restarts a stopped run.
 
