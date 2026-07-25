@@ -15,6 +15,7 @@ import { aiConnectionSchema, createRunSchema, exchangeConnectionSchema } from ".
 import { RoutedAiAgentProvider } from "./services/aiProvider.js";
 import { CredentialVault } from "./services/credentialVault.js";
 import { AgentOrchestrator } from "./services/orchestrator.js";
+import { evaluateRisk } from "./services/riskEngine.js";
 
 export type AppServices = {
   exchangeFactory: ExchangeFactory;
@@ -90,6 +91,7 @@ export function createQonyxApp(options: {
 
   app.get("/api/health", (_request, response) => {
     response.json({
+      mainnetTradingEnabled: config.allowMainnetTrading,
       liveTradingEnabled: config.enableLiveTrading,
       service: "qonyx-api",
       status: "ok",
@@ -160,27 +162,40 @@ export function createQonyxApp(options: {
     const id = paramId(request);
     const ai = vault.getAi(id);
     if (ai) {
-      if (ai.provider === "sandbox") {
-        response.json({ message: "Built-in sandbox agents are ready.", ok: true });
-        return;
-      }
       const provider = new RoutedAiAgentProvider(vault);
       const marketData = new SyntheticMarketDataSource();
       const market = await marketData.getSnapshot("BTC/USD");
       const paper = new PaperExchangeAdapter(10_000, marketData);
       await paper.getMarketSnapshot("BTC/USD");
       const account = await paper.getAccount("BTC/USD");
-      await provider.analyze(
-        {
-          connectionId: id,
-          name: "Connection test",
-          role: "analyst",
-        },
+      const signal = AbortSignal.timeout(30_000);
+      const riskLimits = {
+        capitalLimitUsd: 10_000,
+        dailyLossLimitUsd: 500,
+        maxOrderUsd: 1_000,
+        maxPositionPercent: 0.25,
+      };
+      const analysis = await provider.analyze(
+        { connectionId: id, name: "Connection test analyst", role: "analyst" },
         market,
         account,
-        AbortSignal.timeout(30_000),
+        signal,
       );
-      response.json({ message: "AI provider returned valid structured output.", ok: true });
+      const intent = await provider.trade(
+        { connectionId: id, name: "Connection test trader", role: "trader" },
+        { account, analysis, market, riskLimits },
+        signal,
+      );
+      const risk = evaluateRisk(intent, account, riskLimits, false);
+      await provider.report(
+        { connectionId: id, name: "Connection test reporter", role: "reporter" },
+        { accountAfter: account, analysis, intent, risk },
+        signal,
+      );
+      response.json({
+        message: "Analyst, trader, and reporter returned valid structured output.",
+        ok: true,
+      });
       return;
     }
 
@@ -205,6 +220,7 @@ export function createQonyxApp(options: {
   app.get("/api/system/status", (_request, response) => {
     response.json({
       halted: orchestrator.globallyHalted,
+      mainnetTradingEnabled: config.allowMainnetTrading,
       liveTradingEnabled: config.enableLiveTrading,
     });
   });

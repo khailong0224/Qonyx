@@ -85,6 +85,12 @@ export class ExchangeFactory {
       throw new Error(`A matching ${run.platform} exchange connection was not found.`);
     }
 
+    if (!secret.sandbox && !this.#config.allowMainnetTrading) {
+      throw new Error(
+        "Mainnet trading is disabled. Use a sandbox connection or explicitly set QONYX_ALLOW_MAINNET_TRADING=true after testnet validation.",
+      );
+    }
+
     return new FundCappedExchangeAdapter(
       this.createFromSecret(secret),
       run.risk.capitalLimitUsd,

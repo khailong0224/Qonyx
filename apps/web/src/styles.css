@@ -1820,6 +1820,42 @@ select option {
   gap: 20px;
 }
 
+.demo-disclosure {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  border: 1px solid rgba(245, 158, 11, 0.28);
+  border-radius: 14px;
+  color: #fde68a;
+  background: rgba(245, 158, 11, 0.07);
+  padding: 13px 15px;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.demo-disclosure svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.connection-session-card {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) minmax(260px, 0.8fr) auto;
+  align-items: end;
+  gap: 18px;
+}
+
+.connection-session-card h2 {
+  margin: 4px 0 8px;
+}
+
+.connection-session-card p {
+  margin: 0;
+  color: hsl(var(--muted-foreground));
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 .stacked-fields {
   display: grid;
   gap: 14px;
@@ -1928,7 +1964,8 @@ select option {
 
 @media (max-width: 1100px) {
   .agent-layout,
-  .connection-form-grid {
+  .connection-form-grid,
+  .connection-session-card {
     grid-template-columns: 1fr;
   }
 

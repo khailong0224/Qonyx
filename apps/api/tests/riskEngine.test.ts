@@ -59,7 +59,7 @@ describe("evaluateRisk", () => {
     expect(decision.intent.action).toBe("hold");
   });
 
-  it("blocks trading after the daily loss limit is reached", () => {
+  it("blocks trading after the run realized-loss limit is reached", () => {
     const decision = evaluateRisk(
       buy,
       { ...account, realizedPnlUsd: -100 },
@@ -68,6 +68,6 @@ describe("evaluateRisk", () => {
     );
 
     expect(decision.approved).toBe(false);
-    expect(decision.violations[0]).toMatch(/daily loss/i);
+    expect(decision.violations[0]).toMatch(/realized-loss limit for this run/i);
   });
 });

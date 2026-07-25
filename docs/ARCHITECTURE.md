@@ -76,6 +76,14 @@ If an order submission finishes after the first cancellation request, the
 orchestrator detects the aborted signal and cancels open orders again before the
 cycle can continue.
 
+Finite runs also request open-order cancellation before they are marked
+completed. Open buy and sell orders reserve their approved funds or position so
+a later cycle cannot reuse the same capacity.
+
+If a venue does not confirm cancellation, the run is marked failed with a
+manual-cancellation warning instead of remaining stuck in `stopping`. The
+operator must verify the venue directly and can retry the stop action.
+
 Unlocking removes the global flag but never restarts a stopped run.
 
 ## Credentials
@@ -106,6 +114,8 @@ force stop.
 - Other venue: HTTPS gateway implementing the same contract.
 
 Live adapters are unreachable unless `QONYX_ENABLE_LIVE_TRADING=true`.
+Connections marked as non-sandbox additionally require
+`QONYX_ALLOW_MAINNET_TRADING=true`.
 
 ## Persistence
 
@@ -113,3 +123,8 @@ Connections and run history are intentionally process-local in this version.
 This keeps the sandbox stateless and prevents accidental credential persistence.
 Production persistence can store run/cycle/report records in PostgreSQL or
 Supabase, but credentials should remain in a dedicated encrypted secret store.
+
+The funded live ledger is also process-local. Restarting the API forgets which
+positions belonged to a prior run, so Qonyx intentionally treats existing venue
+positions as external. Reconcile the venue manually before starting a new live
+run after a restart.

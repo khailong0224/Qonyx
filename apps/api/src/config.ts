@@ -12,6 +12,7 @@ function parsePort(value: string | undefined, fallback: number) {
 }
 
 export type ServerConfig = {
+  allowMainnetTrading: boolean;
   enableLiveTrading: boolean;
   host: string;
   port: number;
@@ -20,6 +21,7 @@ export type ServerConfig = {
 
 export function loadServerConfig(): ServerConfig {
   return {
+    allowMainnetTrading: parseBoolean(process.env.QONYX_ALLOW_MAINNET_TRADING, false),
     enableLiveTrading: parseBoolean(process.env.QONYX_ENABLE_LIVE_TRADING, false),
     host: process.env.QONYX_API_HOST?.trim() || "127.0.0.1",
     port: parsePort(process.env.QONYX_API_PORT, 8_787),

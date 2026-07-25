@@ -15,7 +15,9 @@ import { evaluateRisk } from "./riskEngine.js";
 type RunResources = {
   abortController?: AbortController;
   adapter: ExchangeAdapter;
+  hasOpenOrders: boolean;
   reservedBuyNotionalUsd: number;
+  reservedSellNotionalUsd: number;
   timer?: NodeJS.Timeout;
 };
 
@@ -99,7 +101,12 @@ export class AgentOrchestrator {
       updatedAt: now,
     };
     this.#runs.set(run.id, run);
-    this.#resources.set(run.id, { adapter, reservedBuyNotionalUsd: 0 });
+    this.#resources.set(run.id, {
+      adapter,
+      hasOpenOrders: false,
+      reservedBuyNotionalUsd: 0,
+      reservedSellNotionalUsd: 0,
+    });
 
     if (this.#autoSchedule) {
       this.#schedule(run.id, 0);
@@ -136,20 +143,6 @@ export class AgentOrchestrator {
         abortController.signal,
       );
       const accountBefore = await resources.adapter.getAccount(run.config.symbol);
-      const riskAccount = {
-        ...accountBefore,
-        availableCashUsd: Math.min(
-          accountBefore.availableCashUsd,
-          Math.max(
-            0,
-            run.config.risk.capitalLimitUsd -
-              accountBefore.exposureUsd -
-              resources.reservedBuyNotionalUsd,
-          ),
-        ),
-        exposureUsd: accountBefore.exposureUsd + resources.reservedBuyNotionalUsd,
-      };
-
       const analystStartedAt = timestamp();
       const analysis = await this.#agentProvider.analyze(
         run.config.agents.analyst,
@@ -186,6 +179,29 @@ export class AgentOrchestrator {
         status: "completed",
       });
 
+      const riskAccount =
+        tradeIntent.action === "sell"
+          ? {
+              ...accountBefore,
+              exposureUsd: Math.max(
+                0,
+                accountBefore.exposureUsd - resources.reservedSellNotionalUsd,
+              ),
+            }
+          : {
+              ...accountBefore,
+              availableCashUsd: Math.min(
+                accountBefore.availableCashUsd,
+                Math.max(
+                  0,
+                  run.config.risk.capitalLimitUsd -
+                    accountBefore.exposureUsd -
+                    resources.reservedBuyNotionalUsd,
+                ),
+              ),
+              exposureUsd:
+                accountBefore.exposureUsd + resources.reservedBuyNotionalUsd,
+            };
       const risk = evaluateRisk(
         tradeIntent,
         riskAccount,
@@ -199,14 +215,22 @@ export class AgentOrchestrator {
           risk.intent,
           run.config.symbol,
         );
+        resources.hasOpenOrders ||= order.status === "open";
         if (abortController.signal.aborted) {
           await resources.adapter.cancelAllOrders(run.config.symbol);
+          resources.hasOpenOrders = false;
+          resources.reservedBuyNotionalUsd = 0;
+          resources.reservedSellNotionalUsd = 0;
           abortController.signal.throwIfAborted();
         }
       }
       if (order?.status === "open" && order.action === "buy") {
         resources.reservedBuyNotionalUsd +=
-          order.requestedNotionalUsd ?? order.notionalUsd;
+          order.requestedNotionalUsd ?? risk.intent.notionalUsd;
+      }
+      if (order?.status === "open" && order.action === "sell") {
+        resources.reservedSellNotionalUsd +=
+          order.requestedNotionalUsd ?? risk.intent.notionalUsd;
       }
       const accountAfter = await resources.adapter.getAccount(run.config.symbol);
 
@@ -258,17 +282,66 @@ export class AgentOrchestrator {
       run.updatedAt = timestamp();
 
       if (run.config.maxCycles > 0 && run.cycles.length >= run.config.maxCycles) {
-        run.status = "completed";
+        try {
+          await resources.adapter.cancelAllOrders(run.config.symbol);
+          resources.hasOpenOrders = false;
+          resources.reservedBuyNotionalUsd = 0;
+          resources.reservedSellNotionalUsd = 0;
+          run.status = "completed";
+        } catch (error) {
+          const message =
+            error instanceof Error ? error.message : "Unknown cancellation failure.";
+          resources.hasOpenOrders = true;
+          run.lastError =
+            `Configured cycle limit reached, but order cancellation failed; ` +
+            `manual exchange cancellation is required: ${message}`;
+          run.status = "failed";
+        }
         run.stoppedAt = timestamp();
         run.stopReason = "Configured cycle limit reached.";
+        run.updatedAt = timestamp();
       }
     } catch (error) {
       if (abortController.signal.aborted) {
-        run.status = "stopped";
+        if (resources.hasOpenOrders) {
+          try {
+            await resources.adapter.cancelAllOrders(run.config.symbol);
+            resources.hasOpenOrders = false;
+            resources.reservedBuyNotionalUsd = 0;
+            resources.reservedSellNotionalUsd = 0;
+            if (run.lastError?.includes("manual exchange cancellation")) {
+              run.lastError = undefined;
+            }
+          } catch (cancellationError) {
+            const message =
+              cancellationError instanceof Error
+                ? cancellationError.message
+                : "Unknown cancellation failure.";
+            run.lastError =
+              `Order cancellation failed; manual exchange cancellation is required: ${message}`;
+          }
+        }
+        run.status = resources.hasOpenOrders ? "failed" : "stopped";
         run.stoppedAt ||= timestamp();
         run.updatedAt = timestamp();
       } else {
-        const message = error instanceof Error ? error.message : "Agent cycle failed.";
+        let message = error instanceof Error ? error.message : "Agent cycle failed.";
+        if (resources.hasOpenOrders) {
+          try {
+            await resources.adapter.cancelAllOrders(run.config.symbol);
+            resources.hasOpenOrders = false;
+            resources.reservedBuyNotionalUsd = 0;
+            resources.reservedSellNotionalUsd = 0;
+          } catch (cancellationError) {
+            const cancellationMessage =
+              cancellationError instanceof Error
+                ? cancellationError.message
+                : "Unknown cancellation failure.";
+            message +=
+              ` Order cancellation failed; manual exchange cancellation is required: ` +
+              cancellationMessage;
+          }
+        }
         const roles = new Set(steps.map((step) => step.role));
         if (!roles.has("analyst")) {
           steps.push(skippedStep("analyst", run.config.agents.analyst.name, message));
@@ -303,7 +376,10 @@ export class AgentOrchestrator {
       throw new Error("Agent run was not found.");
     }
 
-    if (["completed", "failed", "stopped"].includes(run.status)) {
+    if (
+      ["completed", "failed", "stopped"].includes(run.status) &&
+      !resources.hasOpenOrders
+    ) {
       return run;
     }
 
@@ -315,9 +391,23 @@ export class AgentOrchestrator {
       resources.timer = undefined;
     }
     resources.abortController?.abort(reason);
-    await resources.adapter.cancelAllOrders(run.config.symbol);
-    resources.reservedBuyNotionalUsd = 0;
-    run.status = "stopped";
+    try {
+      await resources.adapter.cancelAllOrders(run.config.symbol);
+      resources.hasOpenOrders = false;
+      resources.reservedBuyNotionalUsd = 0;
+      resources.reservedSellNotionalUsd = 0;
+      if (run.lastError?.includes("manual exchange cancellation")) {
+        run.lastError = undefined;
+      }
+      run.status = "stopped";
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Unknown cancellation failure.";
+      resources.hasOpenOrders = true;
+      run.lastError =
+        `Order cancellation failed; manual exchange cancellation is required: ${message}`;
+      run.status = "failed";
+    }
     run.stoppedAt = timestamp();
     run.updatedAt = timestamp();
     return run;
@@ -325,11 +415,21 @@ export class AgentOrchestrator {
 
   async emergencyStop(reason = "Emergency stop activated") {
     this.#globallyHalted = true;
-    const activeRuns = this.listRuns().filter((run) =>
-      ["running", "starting", "stopping"].includes(run.status),
-    );
+    const activeRuns = this.listRuns().filter((run) => {
+      const resources = this.#resources.get(run.id);
+      return (
+        ["running", "starting", "stopping"].includes(run.status) ||
+        resources?.hasOpenOrders === true
+      );
+    });
     await Promise.all(activeRuns.map((run) => this.stopRun(run.id, reason)));
-    return { halted: true, stoppedRuns: activeRuns.map((run) => run.id) };
+    return {
+      cancellationFailures: activeRuns
+        .filter((run) => run.lastError?.includes("manual exchange cancellation"))
+        .map((run) => run.id),
+      halted: true,
+      stoppedRuns: activeRuns.map((run) => run.id),
+    };
   }
 
   unlock() {

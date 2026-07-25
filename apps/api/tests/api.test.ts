@@ -1,6 +1,10 @@
 import request from "supertest";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createQonyxApp } from "../src/app.js";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 function buildRunPayload() {
   return {
@@ -31,6 +35,7 @@ describe("Qonyx API", () => {
     const platforms = await request(app).get("/api/platforms").expect(200);
 
     expect(health.body.status).toBe("ok");
+    expect(health.body.mainnetTradingEnabled).toBe(false);
     expect(platforms.body.platforms.map((item: { id: string }) => item.id)).toEqual(
       expect.arrayContaining(["paper", "binance", "bitget", "bybit", "moomoo", "webhook"]),
     );
@@ -50,6 +55,27 @@ describe("Qonyx API", () => {
 
     expect(result.body.connection.secretLast4).toBe("1234");
     expect(JSON.stringify(result.body)).not.toContain("test-api-key");
+  });
+
+  it("enforces the optional API session token", async () => {
+    const { app } = createQonyxApp({
+      autoSchedule: false,
+      config: {
+        allowMainnetTrading: false,
+        enableLiveTrading: false,
+        host: "127.0.0.1",
+        port: 8_787,
+        sessionToken: "test-session-token",
+      },
+    });
+
+    await request(app).get("/api/health").expect(401);
+    const result = await request(app)
+      .get("/api/health")
+      .set("X-Qonyx-Session", "test-session-token")
+      .expect(200);
+
+    expect(result.body.status).toBe("ok");
   });
 
   it("starts a paper run, force-stops it, and locks the system", async () => {
@@ -102,5 +128,137 @@ describe("Qonyx API", () => {
     const result = await request(app).post("/api/agent-runs").send(payload).expect(409);
 
     expect(result.body.error).toMatch(/Live trading is disabled/);
+  });
+
+  it("requires a second explicit opt-in before using a mainnet connection", async () => {
+    const { app } = createQonyxApp({
+      autoSchedule: false,
+      config: {
+        allowMainnetTrading: false,
+        enableLiveTrading: true,
+        host: "127.0.0.1",
+        port: 8_787,
+      },
+    });
+    const connection = await request(app)
+      .post("/api/connections/exchange")
+      .send({
+        apiKey: "test-exchange-key",
+        label: "Mainnet connection",
+        platform: "binance",
+        sandbox: false,
+        secret: "test-exchange-secret",
+      })
+      .expect(201);
+
+    const result = await request(app)
+      .post("/api/agent-runs")
+      .send({
+        ...buildRunPayload(),
+        exchangeConnectionId: connection.body.connection.id,
+        mode: "live",
+        platform: "binance",
+      })
+      .expect(409);
+
+    expect(result.body.error).toMatch(/Mainnet trading is disabled/);
+  });
+
+  it("tests valid structured output from every AI role", async () => {
+    const responses = [
+      {
+        confidence: 0.8,
+        direction: "bullish",
+        rationale: "Momentum is positive.",
+        riskFlags: [],
+        signals: ["Positive momentum"],
+        summary: "Bullish test.",
+      },
+      {
+        action: "buy",
+        notionalUsd: 100,
+        orderType: "market",
+        reason: "Structured trade test.",
+      },
+      {
+        action: "BUY 100 USD",
+        budgetSummary: "Budget remains.",
+        headline: "Connection test complete",
+        narrative: "All roles returned typed output.",
+        riskSummary: "Limits remained satisfied.",
+      },
+    ];
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async () => {
+        const content = responses.shift();
+        return new Response(
+          JSON.stringify({
+            choices: [{ message: { content: JSON.stringify(content) } }],
+          }),
+          {
+            headers: { "Content-Type": "application/json" },
+            status: 200,
+          },
+        );
+      });
+    const { app } = createQonyxApp({ autoSchedule: false });
+    const connection = await request(app)
+      .post("/api/connections/ai")
+      .send({
+        apiKey: "test-api-key-1234",
+        baseUrl: "https://ai.example.test/v1",
+        label: "Three-role test",
+        model: "test-model",
+        provider: "openai-compatible",
+      })
+      .expect(201);
+
+    const result = await request(app)
+      .post(`/api/connections/${connection.body.connection.id}/test`)
+      .expect(200);
+
+    expect(result.body.message).toMatch(/Analyst, trader, and reporter/);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("rejects connection URLs that embed credentials", async () => {
+    const { app } = createQonyxApp({ autoSchedule: false });
+
+    const result = await request(app)
+      .post("/api/connections/ai")
+      .send({
+        apiKey: "test-api-key-1234",
+        baseUrl: "https://user:password@ai.example.test/v1",
+        label: "Unsafe URL",
+        model: "test-model",
+        provider: "openai-compatible",
+      })
+      .expect(400);
+
+    expect(result.body.issues[0].message).toMatch(/must not include/);
+  });
+
+  it("accepts venue-style symbols only for gateway platforms", async () => {
+    const { app } = createQonyxApp({ autoSchedule: false });
+
+    await request(app)
+      .post("/api/agent-runs")
+      .send({ ...buildRunPayload(), symbol: "US.AAPL" })
+      .expect(400);
+
+    const gatewayPayload = {
+      ...buildRunPayload(),
+      exchangeConnectionId: "da138baa-4b28-4b43-84fe-4b3017295b5e",
+      mode: "live",
+      platform: "moomoo",
+      symbol: "US.AAPL",
+    };
+    const parsedFailure = await request(app)
+      .post("/api/agent-runs")
+      .send(gatewayPayload)
+      .expect(409);
+
+    expect(parsedFailure.body.error).toMatch(/Live trading is disabled/);
   });
 });

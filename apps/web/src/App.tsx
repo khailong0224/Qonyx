@@ -939,7 +939,7 @@ export function App() {
         description={
           tradingLocked
             ? "This removes the global lock. Stopped agent runs remain stopped until you start a new run."
-            : "Qonyx will abort in-flight agent calls, stop every run, cancel open orders, and block new cycles."
+            : "Qonyx will abort in-flight agent calls, stop every run, request cancellation of open orders, and block new cycles."
         }
         confirmLabel={tradingLocked ? "Unlock Trading" : "Lock Trading"}
         danger={!tradingLocked}
@@ -951,8 +951,13 @@ export function App() {
               await qonyxApi.unlock();
               setTradingLocked(false);
             } else {
-              await qonyxApi.emergencyStop();
+              const result = await qonyxApi.emergencyStop();
               setTradingLocked(true);
+              if (result.cancellationFailures.length > 0) {
+                setSystemError(
+                  `Trading is locked, but ${result.cancellationFailures.length} run(s) require manual exchange cancellation.`,
+                );
+              }
             }
             setKillConfirmOpen(false);
           } catch (error) {
@@ -1024,6 +1029,11 @@ function DashboardView({
         onOpenResearch={onOpenResearch}
         onOpenRisk={onOpenRisk}
       />
+      <DemoDisclosure>
+        Dashboard strategy, bot, PnL, and research cards are local sample data. Use
+        Agent Studio for API-backed paper or exchange workflows. The global kill
+        switch is API-backed.
+      </DemoDisclosure>
       <section className="metric-grid" aria-label="Trading metrics">
         {dynamicMetrics.map((metric) => (
           <MetricCard key={metric.label} {...metric} />
@@ -1035,7 +1045,7 @@ function DashboardView({
           <div className="section-heading">
             <div>
               <p className="eyebrow">Strategies</p>
-              <h2>Live Strategy Stack</h2>
+              <h2>Sample Strategy Stack</h2>
             </div>
             <StatusBadge variant={tradingLocked ? "risk" : "active"}>
               {tradingLocked ? "Locked" : "Running"}
@@ -1076,8 +1086,8 @@ function OnboardingPanel({
         </div>
         <h1>Qonyx Command Center</h1>
         <p>
-          Monitor automated strategies, AI market signals, and risk controls in
-          one polished trading workspace.
+          Explore local strategy demonstrations, then use Agent Studio for
+          API-backed agent runs and risk-controlled execution.
         </p>
         <div className="hero-actions">
           <button className="btn btn-primary" type="button" onClick={onOpenResearch}>
@@ -1094,7 +1104,7 @@ function OnboardingPanel({
         <QonyxMascot className="mascot-hero" />
         <div className="status-row">
           <StatusBadge variant={paperMode ? "paper" : "active"}>
-            {paperMode ? "Paper Trading" : "Live Mode"}
+            {paperMode ? "Paper Demo" : "Demo Toggle Off"}
           </StatusBadge>
           <StatusBadge variant={tradingLocked ? "risk" : "active"}>
             {tradingLocked ? "Risk Locked" : "Risk Clear"}
@@ -1186,6 +1196,11 @@ function StrategyLabView({
 
   return (
     <div className="view-stack">
+      <DemoDisclosure>
+        Backtests use public Coinbase candles and a simplified historical model.
+        Fees and slippage are not modeled. Create Bot adds a local UI prototype and
+        does not place orders.
+      </DemoDisclosure>
       <section className="lab-grid">
         <OnyxCard className="builder-panel">
           <div className="section-heading">
@@ -1418,12 +1433,17 @@ function BotControlView({
 
   return (
     <div className="view-stack">
+      <DemoDisclosure>
+        Bots on this page are local prototypes held in React state. Allocate,
+        activate, and connect controls do not call an exchange or the Qonyx API.
+        Use Agent Studio for executable paper or live-adapter workflows.
+      </DemoDisclosure>
       <section className="bot-hero-grid">
         <OnyxCard className="bot-command-panel">
           <div className="section-heading">
             <div>
               <p className="eyebrow">Bot Control</p>
-              <h2>Connected Bot Stack</h2>
+              <h2>Local Bot Prototype Stack</h2>
             </div>
             <StatusBadge variant={connectedExchange ? "active" : "paper"}>
               {connectedExchange ? "Exchange Connected" : "Paper Mode"}
@@ -1450,12 +1470,12 @@ function BotControlView({
           </div>
           <p>
             {connectedExchange
-              ? "Bots are connected to the simulated Coinbase paper venue for controlled testing."
-              : "Connect the paper venue before promoting bots from paper to active."}
+              ? "The local demo flag is set to Coinbase Paper; no network connection was created."
+              : "Set the local paper-venue demo flag before changing prototype bot status."}
           </p>
           <button className="btn btn-secondary full-width" type="button" onClick={onConnectExchange}>
             <PlugZap size={18} />
-            {connectedExchange ? "Connected" : "Connect Paper Venue"}
+            {connectedExchange ? "Demo Flag Set" : "Set Paper Demo Flag"}
           </button>
         </OnyxCard>
       </section>
@@ -1670,15 +1690,19 @@ function AIResearchView() {
         <div>
           <div className="inline-label violet">
             <Bot size={16} />
-            Qonyx AI
+            Public market summary
           </div>
-          <h1>AI Market Brief</h1>
+          <h1>Rule-based Coinbase Brief</h1>
           <p>
-            The assistant is ready to summarize momentum, liquidity, and risk
-            conditions before a strategy is deployed.
+            Generate a deterministic summary from public Coinbase candles and
+            ticker data. This page does not call a configured AI provider.
           </p>
         </div>
       </OnyxCard>
+      <DemoDisclosure>
+        The insight cards below are static examples. Generate Brief computes a
+        heuristic BTC-USD summary; configured AI providers are used only in Agent Studio.
+      </DemoDisclosure>
       <section className="research-grid">
         {insightCards.map((insight) => (
           <OnyxCard key={insight.title} className="insight-card">
@@ -1696,11 +1720,11 @@ function AIResearchView() {
       <OnyxCard className="prompt-panel">
         <div className="prompt-input">
           <Bot size={20} />
-          <span>Analyze BTC and ETH for the next session.</span>
+          <span>Summarize BTC-USD from public Coinbase market data.</span>
         </div>
         <button className="btn btn-primary" type="button" disabled={briefStatus === "loading"} onClick={generateBrief}>
           {briefStatus === "loading" ? <Activity size={18} /> : <Zap size={18} />}
-          {briefStatus === "loading" ? "Generating" : "Generate Brief"}
+          {briefStatus === "loading" ? "Generating" : "Generate Rule-based Brief"}
         </button>
       </OnyxCard>
       {briefStatus === "loading" && (
@@ -1724,10 +1748,10 @@ function AIResearchView() {
         <OnyxCard className="generated-brief">
           <div className="section-heading compact">
             <div>
-              <p className="eyebrow">Generated Brief</p>
+              <p className="eyebrow">Rule-based Brief</p>
               <h2>{brief.title}</h2>
             </div>
-            <StatusBadge variant="ai">{brief.confidence}</StatusBadge>
+            <StatusBadge variant="ai">{brief.confidence} heuristic</StatusBadge>
           </div>
           <p>{brief.summary}</p>
           <div className="brief-bullets">
@@ -1753,6 +1777,11 @@ function RiskCenterView({
 }) {
   return (
     <div className="view-stack">
+      <DemoDisclosure>
+        Exposure, loss, leverage, and correlation values on this page are illustrative.
+        The emergency kill switch is real and calls the Qonyx API to stop runs and
+        request open-order cancellation.
+      </DemoDisclosure>
       <section className="risk-grid">
         <OnyxCard className="risk-command">
           <div className="section-heading">
@@ -1772,7 +1801,7 @@ function RiskCenterView({
             </div>
           </div>
           <div className="risk-list">
-            <RiskItem label="Max daily loss" value="1.6% / 5.0%" tone="safe" />
+            <RiskItem label="Example loss meter" value="1.6% / 5.0%" tone="safe" />
             <RiskItem label="Leverage cap" value="1.8x / 3.0x" tone="safe" />
             <RiskItem label="Correlation cluster" value="Elevated" tone="warn" />
           </div>
@@ -1785,7 +1814,7 @@ function RiskCenterView({
           <p>
             {tradingLocked
               ? "Automated orders are paused until the lock is removed."
-              : "Pause live automation and cancel pending orders across connected venues."}
+              : "Pause live automation and request cancellation of pending orders across connected venues."}
           </p>
           <KillSwitchButton locked={tradingLocked} onClick={onConfirmKill} />
         </OnyxCard>
@@ -1873,7 +1902,7 @@ function AppSidebar({
             <Command size={18} />
             <div>
               <span>Signal Engine</span>
-              <strong>Online</strong>
+              <strong>Local Sandbox Ready</strong>
             </div>
           </div>
         </div>
@@ -1937,11 +1966,11 @@ function AppHeader({
           onChange={(event) => onPaperModeChange(event.target.checked)}
         />
         <span />
-        Paper
+        Dashboard demo
       </label>
       <button className="btn btn-secondary compact-button" type="button" onClick={onFundClick}>
         <CircleDollarSign size={18} />
-        Fund
+        Demo Fund
       </button>
     </header>
   );
@@ -1955,6 +1984,15 @@ function OnyxCard({
   className?: string;
 }) {
   return <div className={cn("onyx-card", className)}>{children}</div>;
+}
+
+function DemoDisclosure({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="demo-disclosure" role="note">
+      <AlertTriangle size={18} />
+      <span>{children}</span>
+    </div>
+  );
 }
 
 function MetricCard({
@@ -2189,11 +2227,11 @@ function AIInsightPanel({ onOpenResearch }: { onOpenResearch: () => void }) {
           <p className="eyebrow">AI Research</p>
           <h2>Signal Summary</h2>
         </div>
-        <StatusBadge variant="ai">Live</StatusBadge>
+        <StatusBadge variant="neutral">Example</StatusBadge>
       </div>
       <p>
-        Qonyx sees sustained momentum with elevated correlation risk. Reduce
-        duplicate long exposure before adding new BTC entries.
+        Example insight: sustained momentum can coincide with elevated correlation
+        risk. Generate the rule-based brief for current public BTC-USD data.
       </p>
       <button className="btn btn-secondary" type="button" onClick={onOpenResearch}>
         <Bot size={18} />
@@ -2348,8 +2386,11 @@ function FundingModal({
         <div className="modal-icon">
           <CircleDollarSign size={24} />
         </div>
-        <h2 id="fund-title">Add Paper Capital</h2>
-        <p>Increase the simulated account balance used by Qonyx strategy testing.</p>
+        <h2 id="fund-title">Add Demo Paper Capital</h2>
+        <p>
+          Increase only the local dashboard and strategy-lab demo balance. Agent
+          Studio funds are configured separately for each API-backed run.
+        </p>
         <div className="funding-balance">
           <span>Current paper capital</span>
           <strong>{currencyFormatter.format(paperCapital)}</strong>
