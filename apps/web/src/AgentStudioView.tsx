@@ -14,6 +14,7 @@ import {
   Workflow,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { RunActivityLog } from "./RunActivityLog";
 import {
   qonyxApi,
   type AgentRun,
@@ -72,6 +73,7 @@ export function AgentStudioView() {
   const [currentRunId, setCurrentRunId] = useState<string>();
   const [systemHalted, setSystemHalted] = useState(false);
   const [liveTradingEnabled, setLiveTradingEnabled] = useState(false);
+  const [mainnetTradingEnabled, setMainnetTradingEnabled] = useState(false);
   const [mode, setMode] = useState<"paper" | "live">("paper");
   const [symbol, setSymbol] = useState("BTC/USD");
   const [capital, setCapital] = useState(10_000);
@@ -118,6 +120,7 @@ export function AgentStudioView() {
     setRuns(runResult.runs);
     setSystemHalted(status.halted);
     setLiveTradingEnabled(status.liveTradingEnabled);
+    setMainnetTradingEnabled(status.mainnetTradingEnabled);
   };
 
   useEffect(() => {
@@ -181,6 +184,15 @@ export function AgentStudioView() {
       if (mode === "live" && !exchangeConnectionId) {
         throw new Error("Choose a tested exchange connection before live mode.");
       }
+      if (
+        mode === "live" &&
+        selectedExchange?.sandbox === false &&
+        !mainnetTradingEnabled
+      ) {
+        throw new Error(
+          "This is a mainnet connection, but mainnet trading is disabled by server policy.",
+        );
+      }
       const connectionFor = (role: RoleKey) =>
         agentConnections[role]
           ? { connectionId: agentConnections[role] }
@@ -227,7 +239,10 @@ export function AgentStudioView() {
     perform("stop", async () => {
       const { run } = await qonyxApi.stopRun(currentRun.id, "Force stop pressed by user");
       setRuns((existing) => [run, ...existing.filter((item) => item.id !== run.id)]);
-      setNotice("Agent stopped and open orders were cancelled.");
+      if (run.lastError) {
+        throw new Error(run.lastError);
+      }
+      setNotice("Agent stopped and the exchange confirmed the cancellation request.");
     });
 
   const runCycleNow = () =>
@@ -238,12 +253,31 @@ export function AgentStudioView() {
       setNotice("One complete analyst → trader → reporter cycle finished.");
     });
 
+  const refreshCurrentRun = () =>
+    currentRun &&
+    perform("refresh-run", async () => {
+      const { run } = await qonyxApi.getRun(currentRun.id);
+      setRuns((existing) => [
+        run,
+        ...existing.filter((item) => item.id !== run.id),
+      ]);
+      setNotice(`Runtime log refreshed with ${run.events.length} event(s).`);
+    });
+
   const emergencyStop = () =>
     perform("emergency", async () => {
       const result = await qonyxApi.emergencyStop();
       setSystemHalted(true);
       await refresh();
-      setNotice(`Emergency stop locked trading and stopped ${result.stoppedRuns.length} run(s).`);
+      if (result.cancellationFailures.length > 0) {
+        setError(
+          `Trading is locked, but ${result.cancellationFailures.length} run(s) require manual exchange cancellation.`,
+        );
+      } else {
+        setNotice(
+          `Emergency stop locked trading and stopped ${result.stoppedRuns.length} run(s).`,
+        );
+      }
     });
 
   const unlock = () =>
@@ -327,15 +361,24 @@ export function AgentStudioView() {
               {!liveTradingEnabled && <small>Live mode disabled by server policy.</small>}
             </label>
             <label className="field">
-              <span>Market</span>
-              <select value={symbol} onChange={(event) => setSymbol(event.target.value)}>
-                <option>BTC/USD</option>
-                <option>BTC/USDT</option>
-                <option>ETH/USD</option>
-                <option>ETH/USDT</option>
-                <option>SOL/USD</option>
-                <option>SOL/USDT</option>
-              </select>
+              <span>Market symbol</span>
+              <input
+                list="qonyx-market-suggestions"
+                value={symbol}
+                onChange={(event) => setSymbol(event.target.value.toUpperCase())}
+              />
+              <datalist id="qonyx-market-suggestions">
+                <option value="BTC/USD" />
+                <option value="BTC/USDT" />
+                <option value="ETH/USD" />
+                <option value="ETH/USDT" />
+                <option value="SOL/USD" />
+                <option value="SOL/USDT" />
+                <option value="US.AAPL" />
+              </datalist>
+              <small>
+                Use BTC/USD for crypto or the gateway's venue symbol, such as US.AAPL.
+              </small>
             </label>
             {mode === "live" && (
               <label className="field agent-field-wide">
@@ -368,7 +411,7 @@ export function AgentStudioView() {
               onChange={setMaxOrder}
             />
             <NumberField
-              label="Daily loss stop (USD)"
+              label="Realized-loss stop for this run (USD)"
               min={5}
               value={dailyLoss}
               onChange={setDailyLoss}
@@ -418,7 +461,7 @@ export function AgentStudioView() {
             <span><i /> Paper mode is the default</span>
             <span><i /> Secrets stay in server memory</span>
             <span><i /> No leverage or short selling</span>
-            <span><i /> Force stop cancels open orders</span>
+            <span><i /> Force stop requests open-order cancellation</span>
           </div>
           <button
             className="btn btn-primary full-width"
@@ -534,7 +577,11 @@ export function AgentStudioView() {
               </button>
               <button
                 className="btn btn-danger"
-                disabled={Boolean(busyAction) || currentRun.status !== "running"}
+                disabled={
+                  Boolean(busyAction) ||
+                  (currentRun.status !== "running" &&
+                    !currentRun.lastError?.includes("manual exchange cancellation"))
+                }
                 type="button"
                 onClick={stopCurrentRun}
               >
@@ -548,6 +595,11 @@ export function AgentStudioView() {
                 <span>{currentRun.lastError}</span>
               </div>
             )}
+            <RunActivityLog
+              isRefreshing={busyAction === "refresh-run"}
+              run={currentRun}
+              onRefresh={refreshCurrentRun}
+            />
             {latestCycle && (
               <div className="cycle-grid">
                 <div className="cycle-steps">

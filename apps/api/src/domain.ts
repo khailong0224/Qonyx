@@ -10,6 +10,8 @@ export type ExchangePlatform =
 
 export type TradingMode = "paper" | "live";
 export type AgentRole = "analyst" | "trader" | "reporter";
+export type RunEventCategory = "agent" | "order" | "risk" | "run" | "system";
+export type RunEventLevel = "error" | "info" | "warning";
 export type RunStatus =
   | "starting"
   | "running"
@@ -146,10 +148,23 @@ export type RunCycle = {
   tradeIntent: TradeIntent;
 };
 
+export type RunEvent = {
+  category: RunEventCategory;
+  cycleSequence?: number;
+  durationMs?: number;
+  id: string;
+  level: RunEventLevel;
+  message: string;
+  metadata?: Record<string, boolean | number | string>;
+  role?: AgentRole;
+  timestamp: string;
+};
+
 export type AgentRun = {
   config: AgentRunConfig;
   createdAt: string;
   cycles: RunCycle[];
+  events: RunEvent[];
   id: string;
   lastError?: string;
   startedAt?: string;

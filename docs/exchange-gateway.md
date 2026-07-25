@@ -96,6 +96,10 @@ The response must match the Qonyx `OrderResult` shape:
 }
 ```
 
+Qonyx validates account, market, health, and order responses at runtime. A
+missing field, wrong type, invalid timestamp, or negative balance/order value
+fails the cycle instead of being trusted.
+
 ## Cancel all open orders
 
 ```http

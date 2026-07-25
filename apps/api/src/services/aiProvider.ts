@@ -28,6 +28,9 @@ function stripCodeFence(value: string) {
 
 function assertSafeBaseUrl(secret: AiConnectionSecret) {
   const url = new URL(secret.baseUrl);
+  if (url.username || url.password) {
+    throw new Error("AI provider URLs must not include credentials.");
+  }
   const localHost = ["127.0.0.1", "localhost", "::1"].includes(url.hostname);
 
   if (url.protocol !== "https:" && !(localHost && url.protocol === "http:")) {

@@ -36,9 +36,9 @@ export function evaluateRisk(
   if (account.realizedPnlUsd <= -limits.dailyLossLimitUsd) {
     return {
       approved: false,
-      intent: holdIntent("Daily loss limit reached."),
+      intent: holdIntent("Realized-loss limit for this run reached."),
       remainingBudgetUsd,
-      violations: ["The configured daily loss limit has been reached."],
+      violations: ["The configured realized-loss limit for this run has been reached."],
     };
   }
 

@@ -6,6 +6,7 @@ services:
     environment:
       QONYX_API_HOST: 0.0.0.0
       QONYX_API_PORT: 8787
+      QONYX_ALLOW_MAINNET_TRADING: "false"
       QONYX_ENABLE_LIVE_TRADING: "false"
     expose:
       - "8787"

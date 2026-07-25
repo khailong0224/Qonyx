@@ -46,15 +46,23 @@ export class CcxtExchangeAdapter implements ExchangeAdapter {
     }
 
     if (!this.#exchange.has.fetchOpenOrders) {
-      return;
+      throw new Error(
+        `${this.platform} does not expose an open-order cancellation capability.`,
+      );
     }
 
     const orders = await this.#exchange.fetchOpenOrders(symbol);
-    await Promise.allSettled(
+    const cancellations = await Promise.allSettled(
       orders
         .filter((order): order is typeof order & { id: string } => Boolean(order.id))
         .map((order) => this.#exchange.cancelOrder(order.id, symbol)),
     );
+    const failed = cancellations.filter((result) => result.status === "rejected");
+    if (failed.length > 0) {
+      throw new Error(
+        `${this.platform} failed to cancel ${failed.length} open order(s); check the venue manually.`,
+      );
+    }
   }
 
   async getAccount(symbol: string): Promise<AccountSnapshot> {

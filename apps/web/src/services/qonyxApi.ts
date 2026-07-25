@@ -91,6 +91,18 @@ export type AgentStep = {
   status: "completed" | "failed" | "skipped";
 };
 
+export type RunEvent = {
+  category: "agent" | "order" | "risk" | "run" | "system";
+  cycleSequence?: number;
+  durationMs?: number;
+  id: string;
+  level: "error" | "info" | "warning";
+  message: string;
+  metadata?: Record<string, boolean | number | string>;
+  role?: "analyst" | "trader" | "reporter";
+  timestamp: string;
+};
+
 export type RunCycle = {
   accountAfter: AccountSnapshot;
   accountBefore: AccountSnapshot;
@@ -141,6 +153,7 @@ export type AgentRun = {
   config: AgentRunInput;
   createdAt: string;
   cycles: RunCycle[];
+  events: RunEvent[];
   id: string;
   lastError?: string;
   status: RunStatus;
@@ -158,11 +171,14 @@ export class QonyxApiError extends Error {
   }
 }
 
+let sessionToken = "";
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     ...init,
     headers: {
       ...(init?.body ? { "Content-Type": "application/json" } : {}),
+      ...(sessionToken ? { "X-Qonyx-Session": sessionToken } : {}),
       ...init?.headers,
     },
   });
@@ -189,6 +205,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const qonyxApi = {
+  clearSessionToken() {
+    sessionToken = "";
+  },
   createAiConnection(input: {
     apiKey?: string;
     baseUrl?: string;
@@ -219,7 +238,11 @@ export const qonyxApi = {
     return request<void>(`/api/connections/${id}`, { method: "DELETE" });
   },
   emergencyStop(reason = "Emergency stop activated from Qonyx web") {
-    return request<{ halted: boolean; stoppedRuns: string[] }>(
+    return request<{
+      cancellationFailures: string[];
+      halted: boolean;
+      stoppedRuns: string[];
+    }>(
       "/api/system/emergency-stop",
       {
         body: JSON.stringify({ reason }),
@@ -232,6 +255,7 @@ export const qonyxApi = {
   },
   getHealth() {
     return request<{
+      mainnetTradingEnabled: boolean;
       liveTradingEnabled: boolean;
       service: string;
       status: string;
@@ -244,16 +268,26 @@ export const qonyxApi = {
   getRun(id: string) {
     return request<{ run: AgentRun }>(`/api/agent-runs/${id}`);
   },
+  getRunEvents(id: string) {
+    return request<{ events: RunEvent[] }>(`/api/agent-runs/${id}/events`);
+  },
   getRuns() {
     return request<{ runs: AgentRun[] }>("/api/agent-runs");
   },
   getSystemStatus() {
-    return request<{ halted: boolean; liveTradingEnabled: boolean }>("/api/system/status");
+    return request<{
+      halted: boolean;
+      liveTradingEnabled: boolean;
+      mainnetTradingEnabled: boolean;
+    }>("/api/system/status");
   },
   runCycle(id: string) {
     return request<{ run: AgentRun }>(`/api/agent-runs/${id}/cycle`, {
       method: "POST",
     });
+  },
+  setSessionToken(value: string) {
+    sessionToken = value.trim();
   },
   startRun(input: AgentRunInput) {
     return request<{ run: AgentRun }>("/api/agent-runs", {

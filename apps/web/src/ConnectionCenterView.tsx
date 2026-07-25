@@ -35,6 +35,7 @@ export function ConnectionCenterView() {
   const [exchangePassphrase, setExchangePassphrase] = useState("");
   const [exchangeBaseUrl, setExchangeBaseUrl] = useState("");
   const [exchangeSandbox, setExchangeSandbox] = useState(true);
+  const [sessionToken, setSessionToken] = useState("");
   const [busy, setBusy] = useState<string>();
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
@@ -103,6 +104,19 @@ export function ConnectionCenterView() {
       setNotice("Exchange credentials stored in server memory.");
     });
 
+  const applySessionToken = () =>
+    perform("session-token", async () => {
+      const hasToken = Boolean(sessionToken.trim());
+      qonyxApi.setSessionToken(sessionToken);
+      await refresh();
+      setSessionToken("");
+      setNotice(
+        hasToken
+          ? "API session token applied in memory for this browser tab."
+          : "API session token cleared.",
+      );
+    });
+
   const testConnection = (connection: ConnectionSummary) =>
     perform(`test-${connection.id}`, async () => {
       const result = await qonyxApi.testConnection(connection.id);
@@ -139,6 +153,40 @@ export function ConnectionCenterView() {
             <span>No VITE_* secret variables</span>
           </div>
         </div>
+      </section>
+
+      <section className="onyx-card connection-session-card">
+        <div>
+          <p className="eyebrow">Optional API protection</p>
+          <h2>Qonyx session token</h2>
+          <p>
+            Required only when the server sets QONYX_SESSION_TOKEN. The value stays
+            in this tab's memory and is never written to browser storage.
+          </p>
+        </div>
+        <label className="field">
+          <span>Session token</span>
+          <input
+            autoComplete="off"
+            placeholder="Paste token, or leave blank to clear"
+            type="password"
+            value={sessionToken}
+            onChange={(event) => setSessionToken(event.target.value)}
+          />
+        </label>
+        <button
+          className="btn btn-secondary"
+          disabled={Boolean(busy)}
+          type="button"
+          onClick={applySessionToken}
+        >
+          {busy === "session-token" ? (
+            <LoaderCircle className="spin" size={18} />
+          ) : (
+            <ShieldCheck size={18} />
+          )}
+          Apply token
+        </button>
       </section>
 
       {error && (
