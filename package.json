@@ -4,12 +4,25 @@
   "version": "0.1.0",
   "description": "Qonyx AI quantitative trading command center.",
   "workspaces": [
-    "apps/web"
+    "apps/*"
   ],
   "scripts": {
-    "dev": "npm --workspace @qonyx/web run dev",
-    "build": "npm --workspace @qonyx/web run build",
-    "typecheck": "npm --workspace @qonyx/web run typecheck",
+    "dev": "concurrently -k -n api,web -c magenta,cyan \"npm run dev:api\" \"npm run dev:web\"",
+    "dev:api": "npm --workspace @qonyx/api run dev",
+    "dev:web": "npm --workspace @qonyx/web run dev",
+    "build": "npm run build:api && npm run build:web",
+    "build:api": "npm --workspace @qonyx/api run build",
+    "build:web": "npm --workspace @qonyx/web run build",
+    "typecheck": "npm run typecheck:api && npm run typecheck:web",
+    "typecheck:api": "npm --workspace @qonyx/api run typecheck",
+    "typecheck:web": "npm --workspace @qonyx/web run typecheck",
+    "test": "npm run test:api && npm run test:web",
+    "test:api": "npm --workspace @qonyx/api run test",
+    "test:web": "npm --workspace @qonyx/web run test",
+    "check": "npm run typecheck && npm run test && npm run build",
     "preview": "npm --workspace @qonyx/web run preview"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
   }
 }

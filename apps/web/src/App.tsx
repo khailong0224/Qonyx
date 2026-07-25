@@ -22,18 +22,22 @@ import {
   TrendingDown,
   TrendingUp,
   Wallet,
+  Workflow,
   X,
   Zap,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { AgentStudioView } from "./AgentStudioView";
+import { ConnectionCenterView } from "./ConnectionCenterView";
 import {
   fetchCoinbaseCandles,
   fetchMarketSnapshot,
 } from "./services/marketData";
 import type { MarketCandle, MarketProduct } from "./services/marketData";
+import { qonyxApi } from "./services/qonyxApi";
 
-type View = "dashboard" | "strategy" | "bots" | "research" | "risk" | "exchange";
+type View = "dashboard" | "strategy" | "bots" | "agents" | "research" | "risk" | "exchange";
 type BadgeVariant = "active" | "paused" | "risk" | "paper" | "ai" | "neutral";
 type ChartWindow = "1D" | "1W" | "1M";
 type SignalType =
@@ -140,6 +144,7 @@ const navItems: Array<{ id: View; label: string; icon: LucideIcon }> = [
   { id: "dashboard", label: "Command", icon: BarChart3 },
   { id: "strategy", label: "Strategy Lab", icon: Layers3 },
   { id: "bots", label: "Bots", icon: Bot },
+  { id: "agents", label: "Agent Studio", icon: Workflow },
   { id: "research", label: "AI Research", icon: BrainCircuit },
   { id: "risk", label: "Risk Center", icon: ShieldAlert },
   { id: "exchange", label: "Exchanges", icon: PlugZap },
@@ -790,6 +795,14 @@ export function App() {
   const [paperCapital, setPaperCapital] = useState(10000);
   const [connectedExchange, setConnectedExchange] = useState(false);
   const [bots, setBots] = useState<TradingBot[]>(initialBots);
+  const [systemError, setSystemError] = useState<string>();
+
+  useEffect(() => {
+    qonyxApi
+      .getSystemStatus()
+      .then((status) => setTradingLocked(status.halted))
+      .catch(() => undefined);
+  }, []);
 
   const activeTitle = useMemo(
     () => navItems.find((item) => item.id === activeView)?.label ?? "Command",
@@ -876,6 +889,12 @@ export function App() {
           onSearchSubmit={handleSearchSubmit}
         />
         <main className="content-shell">
+          {systemError && (
+            <div className="agent-message error-message" role="alert">
+              <AlertTriangle size={18} />
+              <span>{systemError}</span>
+            </div>
+          )}
           {activeView === "dashboard" && (
             <DashboardView
               bots={bots}
@@ -903,6 +922,7 @@ export function App() {
               onStatusChange={handleBotStatusChange}
             />
           )}
+          {activeView === "agents" && <AgentStudioView />}
           {activeView === "research" && <AIResearchView />}
           {activeView === "risk" && (
             <RiskCenterView
@@ -910,21 +930,37 @@ export function App() {
               onConfirmKill={() => setKillConfirmOpen(true)}
             />
           )}
-          {activeView === "exchange" && (
-            <ExchangeView connectedExchange={connectedExchange} onConnect={() => setConnectedExchange(true)} />
-          )}
+          {activeView === "exchange" && <ConnectionCenterView />}
         </main>
       </div>
       <ConfirmModal
         open={killConfirmOpen}
-        title="Lock all automated trading?"
-        description="Qonyx will pause every live strategy, cancel pending orders, and keep paper trading available for review."
+        title={tradingLocked ? "Unlock automated trading?" : "Force stop all automated trading?"}
+        description={
+          tradingLocked
+            ? "This removes the global lock. Stopped agent runs remain stopped until you start a new run."
+            : "Qonyx will abort in-flight agent calls, stop every run, cancel open orders, and block new cycles."
+        }
         confirmLabel={tradingLocked ? "Unlock Trading" : "Lock Trading"}
         danger={!tradingLocked}
         onCancel={() => setKillConfirmOpen(false)}
-        onConfirm={() => {
-          setTradingLocked((current) => !current);
-          setKillConfirmOpen(false);
+        onConfirm={async () => {
+          setSystemError(undefined);
+          try {
+            if (tradingLocked) {
+              await qonyxApi.unlock();
+              setTradingLocked(false);
+            } else {
+              await qonyxApi.emergencyStop();
+              setTradingLocked(true);
+            }
+            setKillConfirmOpen(false);
+          } catch (error) {
+            setSystemError(
+              error instanceof Error ? error.message : "Trading lock action failed.",
+            );
+            setKillConfirmOpen(false);
+          }
         }}
       />
       <FundingModal

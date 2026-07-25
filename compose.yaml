@@ -1,0 +1,22 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    environment:
+      QONYX_API_HOST: 0.0.0.0
+      QONYX_API_PORT: 8787
+      QONYX_ENABLE_LIVE_TRADING: "false"
+    expose:
+      - "8787"
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: docker/web.Dockerfile
+    depends_on:
+      - api
+    ports:
+      - "127.0.0.1:8080:80"
+    restart: unless-stopped
