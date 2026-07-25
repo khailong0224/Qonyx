@@ -1,0 +1,20 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="512" height="512" rx="112" fill="#05070A"/>
+  <path d="M256 66C308 66 360 129 403 204C447 282 448 383 374 421C327 445 185 445 138 421C64 383 65 282 109 204C152 129 204 66 256 66Z" fill="url(#onyx)"/>
+  <path d="M132 286C151 169 209 90 257 90C314 90 372 184 389 272C356 212 310 182 252 186C193 190 151 225 132 286Z" fill="url(#shine)" opacity="0.9"/>
+  <path d="M151 382C198 403 315 403 361 383" stroke="white" stroke-opacity="0.16" stroke-width="16" stroke-linecap="round"/>
+  <path d="M126 250C145 161 202 91 256 91" stroke="white" stroke-opacity="0.34" stroke-width="14" stroke-linecap="round"/>
+  <defs>
+    <linearGradient id="onyx" x1="151" y1="103" x2="354" y2="430" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#52565D"/>
+      <stop offset="0.32" stop-color="#111317"/>
+      <stop offset="0.66" stop-color="#050506"/>
+      <stop offset="1" stop-color="#171A20"/>
+    </linearGradient>
+    <linearGradient id="shine" x1="201" y1="82" x2="342" y2="279" gradientUnits="userSpaceOnUse">
+      <stop stop-color="white" stop-opacity="0.55"/>
+      <stop offset="0.45" stop-color="white" stop-opacity="0.12"/>
+      <stop offset="1" stop-color="white" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+</svg>
