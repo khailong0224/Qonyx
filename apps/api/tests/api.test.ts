@@ -97,6 +97,32 @@ describe("Qonyx API", () => {
     await request(app).post("/api/agent-runs").send(buildRunPayload()).expect(409);
   });
 
+  it("exposes structured runtime events for an agent run", async () => {
+    const { app } = createQonyxApp({ autoSchedule: false });
+    const created = await request(app)
+      .post("/api/agent-runs")
+      .send(buildRunPayload())
+      .expect(201);
+
+    await request(app)
+      .post(`/api/agent-runs/${created.body.run.id}/cycle`)
+      .expect(200);
+    const result = await request(app)
+      .get(`/api/agent-runs/${created.body.run.id}/events`)
+      .expect(200);
+
+    expect(result.body.events[0].message).toBe("Exchange connection validated.");
+    expect(
+      result.body.events.map((event: { category: string }) => event.category),
+    ).toEqual(expect.arrayContaining(["agent", "risk", "run", "system"]));
+    expect(
+      result.body.events.every(
+        (event: { id?: string; level?: string; timestamp?: string }) =>
+          event.id && event.level && event.timestamp,
+      ),
+    ).toBe(true);
+  });
+
   it("rejects an invalid fund configuration", async () => {
     const { app } = createQonyxApp({ autoSchedule: false });
     const payload = buildRunPayload();

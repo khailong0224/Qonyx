@@ -83,7 +83,7 @@ No host credential file is mounted by the provided compose configuration.
 npm.cmd run check
 ```
 
-The check gate runs API and web typechecks, 35 tests, and both production builds.
+The check gate runs API and web typechecks, 39 tests, and both production builds.
 
 ## Live exchange opt-in
 
@@ -113,6 +113,7 @@ explicit opt-in. Keep withdrawals disabled and use the smallest practical fund.
 | `GET/POST` | `/api/agent-runs` | List or start agent workflows |
 | `POST` | `/api/agent-runs/:id/cycle` | Run one complete cycle |
 | `POST` | `/api/agent-runs/:id/stop` | Force stop one workflow |
+| `GET` | `/api/agent-runs/:id/events` | Retrieve structured runtime activity |
 | `GET` | `/api/agent-runs/:id/reports` | Retrieve cycle reports |
 | `POST` | `/api/system/emergency-stop` | Stop all runs and lock trading |
 | `POST` | `/api/system/unlock` | Remove the global lock |

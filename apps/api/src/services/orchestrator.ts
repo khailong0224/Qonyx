@@ -7,6 +7,7 @@ import type {
   ExchangeAdapter,
   OrderResult,
   RunCycle,
+  RunEvent,
   TradingReport,
 } from "../domain.js";
 import type { ExchangeFactory } from "../exchanges/exchangeFactory.js";
@@ -21,8 +22,14 @@ type RunResources = {
   timer?: NodeJS.Timeout;
 };
 
+const MAX_RUN_EVENTS = 2_000;
+
 function timestamp() {
   return new Date().toISOString();
+}
+
+function elapsedMs(startedAt: number) {
+  return Math.max(0, Date.now() - startedAt);
 }
 
 function skippedStep(role: AgentStep["role"], name: string, error: string): AgentStep {
@@ -95,6 +102,7 @@ export class AgentOrchestrator {
       config,
       createdAt: now,
       cycles: [],
+      events: [],
       id: randomUUID(),
       startedAt: now,
       status: "running",
@@ -106,6 +114,25 @@ export class AgentOrchestrator {
       hasOpenOrders: false,
       reservedBuyNotionalUsd: 0,
       reservedSellNotionalUsd: 0,
+    });
+    this.#recordEvent(run, {
+      category: "system",
+      level: "info",
+      message: "Exchange connection validated.",
+      metadata: {
+        platform: config.platform,
+        symbol: config.symbol,
+      },
+    });
+    this.#recordEvent(run, {
+      category: "run",
+      level: "info",
+      message: `Run started in ${config.mode} mode.`,
+      metadata: {
+        maxCycles: config.maxCycles,
+        platform: config.platform,
+        symbol: config.symbol,
+      },
     });
 
     if (this.#autoSchedule) {
@@ -136,14 +163,55 @@ export class AgentOrchestrator {
     resources.abortController = abortController;
     const steps: AgentStep[] = [];
     const startedAt = timestamp();
+    const cycleStartedAt = Date.now();
+    const cycleSequence = run.cycles.length + 1;
+    let activeStage:
+      | {
+          category: RunEvent["category"];
+          failureMessage: string;
+          role?: RunEvent["role"];
+          startedAt: number;
+        }
+      | undefined;
+    this.#recordEvent(run, {
+      category: "run",
+      cycleSequence,
+      level: "info",
+      message: `Cycle ${cycleSequence} started.`,
+    });
 
     try {
+      const snapshotStartedAt = Date.now();
+      activeStage = {
+        category: "system",
+        failureMessage: "Market or account snapshot loading failed.",
+        startedAt: snapshotStartedAt,
+      };
       const market = await resources.adapter.getMarketSnapshot(
         run.config.symbol,
         abortController.signal,
       );
       const accountBefore = await resources.adapter.getAccount(run.config.symbol);
+      activeStage = undefined;
+      this.#recordEvent(run, {
+        category: "system",
+        cycleSequence,
+        durationMs: elapsedMs(snapshotStartedAt),
+        level: "info",
+        message: "Market and account snapshots loaded.",
+        metadata: {
+          exposureUsd: accountBefore.exposureUsd,
+          price: market.price,
+        },
+      });
       const analystStartedAt = timestamp();
+      const analystStartedAtMs = Date.now();
+      activeStage = {
+        category: "agent",
+        failureMessage: `${run.config.agents.analyst.name} failed during market analysis.`,
+        role: "analyst",
+        startedAt: analystStartedAtMs,
+      };
       const analysis = await this.#agentProvider.analyze(
         run.config.agents.analyst,
         market,
@@ -158,8 +226,28 @@ export class AgentOrchestrator {
         startedAt: analystStartedAt,
         status: "completed",
       });
+      activeStage = undefined;
+      this.#recordEvent(run, {
+        category: "agent",
+        cycleSequence,
+        durationMs: elapsedMs(analystStartedAtMs),
+        level: "info",
+        message: `${run.config.agents.analyst.name} completed market analysis.`,
+        metadata: {
+          confidence: analysis.confidence,
+          direction: analysis.direction,
+        },
+        role: "analyst",
+      });
 
       const traderStartedAt = timestamp();
+      const traderStartedAtMs = Date.now();
+      activeStage = {
+        category: "agent",
+        failureMessage: `${run.config.agents.trader.name} failed while preparing a trade intent.`,
+        role: "trader",
+        startedAt: traderStartedAtMs,
+      };
       const tradeIntent = await this.#agentProvider.trade(
         run.config.agents.trader,
         {
@@ -177,6 +265,20 @@ export class AgentOrchestrator {
         role: "trader",
         startedAt: traderStartedAt,
         status: "completed",
+      });
+      activeStage = undefined;
+      this.#recordEvent(run, {
+        category: "agent",
+        cycleSequence,
+        durationMs: elapsedMs(traderStartedAtMs),
+        level: "info",
+        message: `${run.config.agents.trader.name} proposed a ${tradeIntent.action} action.`,
+        metadata: {
+          action: tradeIntent.action,
+          notionalUsd: tradeIntent.notionalUsd,
+          orderType: tradeIntent.orderType,
+        },
+        role: "trader",
       });
 
       const riskAccount =
@@ -208,19 +310,64 @@ export class AgentOrchestrator {
         run.config.risk,
         this.#globallyHalted,
       );
+      this.#recordEvent(run, {
+        category: "risk",
+        cycleSequence,
+        level: risk.violations.length > 0 ? "warning" : "info",
+        message: !risk.approved
+          ? "Risk gate blocked the trade intent."
+          : risk.violations.length > 0
+            ? "Risk gate adjusted and approved the trade intent."
+            : "Risk gate approved the trade intent.",
+        metadata: {
+          action: risk.intent.action,
+          approved: risk.approved,
+          remainingBudgetUsd: risk.remainingBudgetUsd,
+          violationCount: risk.violations.length,
+        },
+      });
       let order: OrderResult | undefined;
       if (risk.approved && risk.intent.action !== "hold") {
         abortController.signal.throwIfAborted();
+        const orderStartedAt = Date.now();
+        activeStage = {
+          category: "order",
+          failureMessage: "Order submission failed.",
+          startedAt: orderStartedAt,
+        };
         order = await resources.adapter.placeOrder(
           risk.intent,
           run.config.symbol,
         );
+        activeStage = undefined;
+        this.#recordEvent(run, {
+          category: "order",
+          cycleSequence,
+          durationMs: elapsedMs(orderStartedAt),
+          level:
+            order.status === "rejected" || order.status === "cancelled"
+              ? "warning"
+              : "info",
+          message: `Order ${order.status}: ${order.action} ${order.notionalUsd.toFixed(2)} USD.`,
+          metadata: {
+            action: order.action,
+            notionalUsd: order.notionalUsd,
+            orderId: order.id,
+            status: order.status,
+          },
+        });
         resources.hasOpenOrders ||= order.status === "open";
         if (abortController.signal.aborted) {
           await resources.adapter.cancelAllOrders(run.config.symbol);
           resources.hasOpenOrders = false;
           resources.reservedBuyNotionalUsd = 0;
           resources.reservedSellNotionalUsd = 0;
+          this.#recordEvent(run, {
+            category: "order",
+            cycleSequence,
+            level: "warning",
+            message: "Orders cancelled after a stop raced with order submission.",
+          });
           abortController.signal.throwIfAborted();
         }
       }
@@ -232,9 +379,22 @@ export class AgentOrchestrator {
         resources.reservedSellNotionalUsd +=
           order.requestedNotionalUsd ?? risk.intent.notionalUsd;
       }
+      activeStage = {
+        category: "system",
+        failureMessage: "Post-trade account snapshot loading failed.",
+        startedAt: Date.now(),
+      };
       const accountAfter = await resources.adapter.getAccount(run.config.symbol);
+      activeStage = undefined;
 
       const reporterStartedAt = timestamp();
+      const reporterStartedAtMs = Date.now();
+      activeStage = {
+        category: "agent",
+        failureMessage: `${run.config.agents.reporter.name} failed while preparing the report.`,
+        role: "reporter",
+        startedAt: reporterStartedAtMs,
+      };
       let report: TradingReport;
       try {
         report = await this.#agentProvider.report(
@@ -250,7 +410,19 @@ export class AgentOrchestrator {
           startedAt: reporterStartedAt,
           status: "completed",
         });
+        activeStage = undefined;
+        this.#recordEvent(run, {
+          category: "agent",
+          cycleSequence,
+          durationMs: elapsedMs(reporterStartedAtMs),
+          level: "info",
+          message: `${run.config.agents.reporter.name} completed the cycle report.`,
+          role: "reporter",
+        });
       } catch (error) {
+        if (abortController.signal.aborted) {
+          throw error;
+        }
         report = fallbackReport(error);
         steps.push({
           completedAt: timestamp(),
@@ -260,6 +432,18 @@ export class AgentOrchestrator {
           role: "reporter",
           startedAt: reporterStartedAt,
           status: "failed",
+        });
+        activeStage = undefined;
+        this.#recordEvent(run, {
+          category: "agent",
+          cycleSequence,
+          durationMs: elapsedMs(reporterStartedAtMs),
+          level: "warning",
+          message: `${run.config.agents.reporter.name} failed; a fallback report was generated.`,
+          metadata: {
+            error: error instanceof Error ? error.message : "Reporter failed.",
+          },
+          role: "reporter",
         });
       }
 
@@ -273,13 +457,24 @@ export class AgentOrchestrator {
         order,
         report,
         risk,
-        sequence: run.cycles.length + 1,
+        sequence: cycleSequence,
         startedAt,
         steps,
         tradeIntent,
       };
       run.cycles.push(cycle);
-      run.updatedAt = timestamp();
+      this.#recordEvent(run, {
+        category: "run",
+        cycleSequence,
+        durationMs: elapsedMs(cycleStartedAt),
+        level: "info",
+        message: `Cycle ${cycleSequence} completed.`,
+        metadata: {
+          action: tradeIntent.action,
+          orderSubmitted: Boolean(order),
+          riskApproved: risk.approved,
+        },
+      });
 
       if (run.config.maxCycles > 0 && run.cycles.length >= run.config.maxCycles) {
         try {
@@ -288,6 +483,18 @@ export class AgentOrchestrator {
           resources.reservedBuyNotionalUsd = 0;
           resources.reservedSellNotionalUsd = 0;
           run.status = "completed";
+          this.#recordEvent(run, {
+            category: "order",
+            cycleSequence,
+            level: "info",
+            message: "Final open-order cancellation request completed.",
+          });
+          this.#recordEvent(run, {
+            category: "run",
+            cycleSequence,
+            level: "info",
+            message: "Configured cycle limit reached; run completed.",
+          });
         } catch (error) {
           const message =
             error instanceof Error ? error.message : "Unknown cancellation failure.";
@@ -296,6 +503,13 @@ export class AgentOrchestrator {
             `Configured cycle limit reached, but order cancellation failed; ` +
             `manual exchange cancellation is required: ${message}`;
           run.status = "failed";
+          this.#recordEvent(run, {
+            category: "order",
+            cycleSequence,
+            level: "error",
+            message: "Final open-order cancellation failed; manual action is required.",
+            metadata: { error: message },
+          });
         }
         run.stoppedAt = timestamp();
         run.stopReason = "Configured cycle limit reached.";
@@ -303,6 +517,13 @@ export class AgentOrchestrator {
       }
     } catch (error) {
       if (abortController.signal.aborted) {
+        this.#recordEvent(run, {
+          category: "run",
+          cycleSequence,
+          durationMs: elapsedMs(cycleStartedAt),
+          level: "warning",
+          message: `Cycle ${cycleSequence} was interrupted by a stop request.`,
+        });
         if (resources.hasOpenOrders) {
           try {
             await resources.adapter.cancelAllOrders(run.config.symbol);
@@ -312,6 +533,12 @@ export class AgentOrchestrator {
             if (run.lastError?.includes("manual exchange cancellation")) {
               run.lastError = undefined;
             }
+            this.#recordEvent(run, {
+              category: "order",
+              cycleSequence,
+              level: "info",
+              message: "Open orders were cancelled after the interrupted cycle.",
+            });
           } catch (cancellationError) {
             const message =
               cancellationError instanceof Error
@@ -319,6 +546,13 @@ export class AgentOrchestrator {
                 : "Unknown cancellation failure.";
             run.lastError =
               `Order cancellation failed; manual exchange cancellation is required: ${message}`;
+            this.#recordEvent(run, {
+              category: "order",
+              cycleSequence,
+              level: "error",
+              message: "Order cancellation failed; manual action is required.",
+              metadata: { error: message },
+            });
           }
         }
         run.status = resources.hasOpenOrders ? "failed" : "stopped";
@@ -326,12 +560,29 @@ export class AgentOrchestrator {
         run.updatedAt = timestamp();
       } else {
         let message = error instanceof Error ? error.message : "Agent cycle failed.";
+        if (activeStage) {
+          this.#recordEvent(run, {
+            category: activeStage.category,
+            cycleSequence,
+            durationMs: elapsedMs(activeStage.startedAt),
+            level: "error",
+            message: activeStage.failureMessage,
+            metadata: { error: message },
+            role: activeStage.role,
+          });
+        }
         if (resources.hasOpenOrders) {
           try {
             await resources.adapter.cancelAllOrders(run.config.symbol);
             resources.hasOpenOrders = false;
             resources.reservedBuyNotionalUsd = 0;
             resources.reservedSellNotionalUsd = 0;
+            this.#recordEvent(run, {
+              category: "order",
+              cycleSequence,
+              level: "info",
+              message: "Open orders were cancelled after the cycle failure.",
+            });
           } catch (cancellationError) {
             const cancellationMessage =
               cancellationError instanceof Error
@@ -355,7 +606,14 @@ export class AgentOrchestrator {
         run.lastError = message;
         run.status = "failed";
         run.stoppedAt = timestamp();
-        run.updatedAt = timestamp();
+        this.#recordEvent(run, {
+          category: "run",
+          cycleSequence,
+          durationMs: elapsedMs(cycleStartedAt),
+          level: "error",
+          message: `Cycle ${cycleSequence} failed; the run was stopped.`,
+          metadata: { error: message },
+        });
       }
     } finally {
       resources.abortController = undefined;
@@ -385,7 +643,12 @@ export class AgentOrchestrator {
 
     run.status = "stopping";
     run.stopReason = reason;
-    run.updatedAt = timestamp();
+    this.#recordEvent(run, {
+      category: "run",
+      level: "warning",
+      message: "Stop requested.",
+      metadata: { reason },
+    });
     if (resources.timer) {
       clearTimeout(resources.timer);
       resources.timer = undefined;
@@ -400,6 +663,17 @@ export class AgentOrchestrator {
         run.lastError = undefined;
       }
       run.status = "stopped";
+      this.#recordEvent(run, {
+        category: "order",
+        level: "info",
+        message: "Open-order cancellation request completed.",
+      });
+      this.#recordEvent(run, {
+        category: "run",
+        level: "info",
+        message: "Run stopped.",
+        metadata: { reason },
+      });
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Unknown cancellation failure.";
@@ -407,6 +681,12 @@ export class AgentOrchestrator {
       run.lastError =
         `Order cancellation failed; manual exchange cancellation is required: ${message}`;
       run.status = "failed";
+      this.#recordEvent(run, {
+        category: "order",
+        level: "error",
+        message: "Order cancellation failed; manual action is required.",
+        metadata: { error: message },
+      });
     }
     run.stoppedAt = timestamp();
     run.updatedAt = timestamp();
@@ -450,5 +730,18 @@ export class AgentOrchestrator {
       void this.runOneCycle(id);
     }, delay);
     resources.timer.unref();
+  }
+
+  #recordEvent(run: AgentRun, event: Omit<RunEvent, "id" | "timestamp">) {
+    const eventTimestamp = timestamp();
+    run.events.push({
+      ...event,
+      id: randomUUID(),
+      timestamp: eventTimestamp,
+    });
+    if (run.events.length > MAX_RUN_EVENTS) {
+      run.events.splice(0, run.events.length - MAX_RUN_EVENTS);
+    }
+    run.updatedAt = eventTimestamp;
   }
 }

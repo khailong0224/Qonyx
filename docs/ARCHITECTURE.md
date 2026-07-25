@@ -86,6 +86,18 @@ operator must verify the venue directly and can retry the stop action.
 
 Unlocking removes the global flag but never restarts a stopped run.
 
+## Runtime observability
+
+Every run owns a bounded structured event stream. The orchestrator records run,
+agent, risk, order, and system events with timestamps; stage and cycle events
+also include elapsed time. Event metadata is deliberately operational and never
+contains stored credentials or raw provider secrets.
+
+The browser receives these events through the normal run polling response and
+can also request `GET /api/agent-runs/:id/events`. Each run retains its newest
+2,000 events to prevent an unbounded continuous workflow from exhausting
+memory. JSON export is generated in the browser from that same stream.
+
 ## Credentials
 
 The browser submits credentials over the API connection. The server stores them
@@ -119,7 +131,7 @@ Connections marked as non-sandbox additionally require
 
 ## Persistence
 
-Connections and run history are intentionally process-local in this version.
+Connections, run history, and runtime events are intentionally process-local in this version.
 This keeps the sandbox stateless and prevents accidental credential persistence.
 Production persistence can store run/cycle/report records in PostgreSQL or
 Supabase, but credentials should remain in a dedicated encrypted secret store.

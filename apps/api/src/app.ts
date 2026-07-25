@@ -255,6 +255,13 @@ export function createQonyxApp(options: {
     }
   });
 
+  app.get("/api/agent-runs/:id/events", (request, response) => {
+    const run = getRunOr404(services, request, response);
+    if (run) {
+      response.json({ events: run.events });
+    }
+  });
+
   app.get("/api/agent-runs/:id/reports", (request, response) => {
     const run = getRunOr404(services, request, response);
     if (run) {

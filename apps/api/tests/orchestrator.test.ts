@@ -59,6 +59,66 @@ describe("AgentOrchestrator", () => {
       runConfig.risk.capitalLimitUsd * runConfig.risk.maxPositionPercent + 1,
     );
     expect(cycle.report.headline.length).toBeGreaterThan(0);
+    expect(completed.events.map((event) => event.category)).toEqual(
+      expect.arrayContaining(["agent", "risk", "run", "system"]),
+    );
+    expect(
+      completed.events
+        .filter((event) => event.category === "agent")
+        .map((event) => event.role),
+    ).toEqual(["analyst", "trader", "reporter"]);
+    expect(
+      completed.events.find((event) => event.message === "Cycle 1 completed.")
+        ?.durationMs,
+    ).toBeGreaterThanOrEqual(0);
+    expect(new Set(completed.events.map((event) => event.id)).size).toBe(
+      completed.events.length,
+    );
+  });
+
+  it("records the failing agent stage before stopping a run", async () => {
+    const provider: AiAgentProvider = {
+      analyze: async () => ({
+        confidence: 0.9,
+        direction: "bullish",
+        rationale: "Test",
+        riskFlags: [],
+        signals: ["Test"],
+        summary: "Bullish test",
+      }),
+      report: async () => ({
+        action: "Test",
+        budgetSummary: "Test",
+        headline: "Test",
+        narrative: "Test",
+        riskSummary: "Test",
+      }),
+      trade: async () => {
+        throw new Error("provider unavailable");
+      },
+    };
+    const orchestrator = new AgentOrchestrator(
+      provider,
+      {
+        createForRun: () =>
+          new PaperExchangeAdapter(1_000, new SyntheticMarketDataSource(100)),
+      },
+      { autoSchedule: false },
+    );
+    const run = await orchestrator.startRun(runConfig);
+
+    const failed = await orchestrator.runOneCycle(run.id);
+    const traderFailure = failed.events.find(
+      (event) => event.role === "trader" && event.level === "error",
+    );
+
+    expect(failed.status).toBe("failed");
+    expect(traderFailure).toMatchObject({
+      category: "agent",
+      cycleSequence: 1,
+      message: "Vector failed while preparing a trade intent.",
+    });
+    expect(traderFailure?.metadata?.error).toBe("provider unavailable");
   });
 
   it("force-stops a run and globally blocks new runs until unlock", async () => {
@@ -78,6 +138,9 @@ describe("AgentOrchestrator", () => {
     expect(result.stoppedRuns).toContain(run.id);
     expect(result.cancellationFailures).toEqual([]);
     expect(orchestrator.getRun(run.id)?.status).toBe("stopped");
+    expect(orchestrator.getRun(run.id)?.events.map((event) => event.message)).toEqual(
+      expect.arrayContaining(["Stop requested.", "Run stopped."]),
+    );
     await expect(orchestrator.startRun(runConfig)).rejects.toThrow(/Emergency stop/);
     expect(orchestrator.unlock()).toEqual({ halted: false });
   });

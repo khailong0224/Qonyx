@@ -8,7 +8,7 @@ From the repository root:
 npm.cmd run check
 ```
 
-This runs strict API and web typechecks, 35 unit/integration tests, and both
+This runs strict API and web typechecks, 39 unit/integration tests, and both
 production builds. To narrow a failure:
 
 ```powershell
@@ -47,6 +47,28 @@ If `QONYX_SESSION_TOKEN` is configured, add:
 $headers = @{ "X-Qonyx-Session" = "your-token" }
 Invoke-RestMethod -Uri "http://127.0.0.1:8787/api/health" -Headers $headers
 ```
+
+## Inspect a running agent
+
+The Runtime activity log in **Agent Studio** is the fastest way to follow a
+three-agent run. It refreshes automatically every three seconds while the run is
+active and records agent handoffs, stage durations, risk decisions, order
+results, stop requests, and failures.
+
+To inspect the same structured events from PowerShell:
+
+```powershell
+$qonyxApi = "http://127.0.0.1:8787"
+$latestRun = (Invoke-RestMethod -Uri "$qonyxApi/api/agent-runs").runs[0]
+$runId = $latestRun.id
+(Invoke-RestMethod -Uri "$qonyxApi/api/agent-runs/$runId/events").events |
+  Select-Object timestamp, level, category, role, cycleSequence, durationMs, message
+```
+
+If API session protection is enabled, add `-Headers $headers` to both requests.
+Use the event's timestamp and cycle number to correlate it with API terminal
+output or exchange/testnet logs. Qonyx keeps the newest 2,000 events per run in
+memory; restarting the API clears them.
 
 ## Docker debugging
 

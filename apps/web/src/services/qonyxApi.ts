@@ -91,6 +91,18 @@ export type AgentStep = {
   status: "completed" | "failed" | "skipped";
 };
 
+export type RunEvent = {
+  category: "agent" | "order" | "risk" | "run" | "system";
+  cycleSequence?: number;
+  durationMs?: number;
+  id: string;
+  level: "error" | "info" | "warning";
+  message: string;
+  metadata?: Record<string, boolean | number | string>;
+  role?: "analyst" | "trader" | "reporter";
+  timestamp: string;
+};
+
 export type RunCycle = {
   accountAfter: AccountSnapshot;
   accountBefore: AccountSnapshot;
@@ -141,6 +153,7 @@ export type AgentRun = {
   config: AgentRunInput;
   createdAt: string;
   cycles: RunCycle[];
+  events: RunEvent[];
   id: string;
   lastError?: string;
   status: RunStatus;
@@ -254,6 +267,9 @@ export const qonyxApi = {
   },
   getRun(id: string) {
     return request<{ run: AgentRun }>(`/api/agent-runs/${id}`);
+  },
+  getRunEvents(id: string) {
+    return request<{ events: RunEvent[] }>(`/api/agent-runs/${id}/events`);
   },
   getRuns() {
     return request<{ runs: AgentRun[] }>("/api/agent-runs");

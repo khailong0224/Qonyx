@@ -14,6 +14,7 @@ import {
   Workflow,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { RunActivityLog } from "./RunActivityLog";
 import {
   qonyxApi,
   type AgentRun,
@@ -250,6 +251,17 @@ export function AgentStudioView() {
       const { run } = await qonyxApi.runCycle(currentRun.id);
       setRuns((existing) => [run, ...existing.filter((item) => item.id !== run.id)]);
       setNotice("One complete analyst → trader → reporter cycle finished.");
+    });
+
+  const refreshCurrentRun = () =>
+    currentRun &&
+    perform("refresh-run", async () => {
+      const { run } = await qonyxApi.getRun(currentRun.id);
+      setRuns((existing) => [
+        run,
+        ...existing.filter((item) => item.id !== run.id),
+      ]);
+      setNotice(`Runtime log refreshed with ${run.events.length} event(s).`);
     });
 
   const emergencyStop = () =>
@@ -583,6 +595,11 @@ export function AgentStudioView() {
                 <span>{currentRun.lastError}</span>
               </div>
             )}
+            <RunActivityLog
+              isRefreshing={busyAction === "refresh-run"}
+              run={currentRun}
+              onRefresh={refreshCurrentRun}
+            />
             {latestCycle && (
               <div className="cycle-grid">
                 <div className="cycle-steps">

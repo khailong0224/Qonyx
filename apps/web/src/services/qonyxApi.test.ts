@@ -33,3 +33,22 @@ describe("qonyxApi session token", () => {
     ).toBe(false);
   });
 });
+
+describe("qonyxApi runtime events", () => {
+  it("loads the activity stream for a run", async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ events: [] }), {
+        headers: { "Content-Type": "application/json" },
+        status: 200,
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await qonyxApi.getRunEvents("run-123");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/agent-runs/run-123/events",
+      expect.objectContaining({ headers: {} }),
+    );
+  });
+});

@@ -42,9 +42,11 @@ live adapters and mainnet trading.
    position, cycle interval, and cycle limit.
 5. Leave all three AI-provider selectors on **Built-in deterministic sandbox**.
 6. Select **Start three-agent workflow**.
-7. Watch the analyst, trader, deterministic risk decision, order result, and
-   reporter output in the Runtime card.
-8. Use **Run one cycle now** for an immediate cycle, or **Force stop agent** to
+7. Watch **Runtime activity log** for lifecycle, agent, risk, order, and system
+   events. Each completed stage includes its duration.
+8. Filter the log by category or warnings/errors. Select **Refresh** for an
+   immediate update or **Export JSON** to download the current run's audit log.
+9. Use **Run one cycle now** for an immediate cycle, or **Force stop agent** to
    stop the run and request order cancellation.
 
 A cycle limit of `0` means continuous scheduling. A positive limit cancels open
@@ -146,6 +148,10 @@ Qonyx uses them.
 
 ## Stops and reports
 
+- The Runtime activity log updates every three seconds while a run is active.
+  It keeps the newest 2,000 structured events for each in-memory run.
+- **Export JSON** downloads the run identity, status, symbol, platform, mode,
+  export time, and event stream. It does not include connection credentials.
 - **Force stop agent** aborts the active AI call, clears its next timer, and asks
   the venue to cancel open orders.
 - **Force stop all** does the same for every active run and locks new runs.
@@ -154,3 +160,5 @@ Qonyx uses them.
   **manual exchange cancellation is required**. Check the venue immediately,
   cancel there if necessary, then retry the stop action.
 - Run history and reports are available until the API process restarts.
+- Direct API clients can retrieve the same event stream from
+  `GET /api/agent-runs/:id/events`.
